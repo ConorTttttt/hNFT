@@ -32,19 +32,33 @@ pub struct NftAttribute {
     pub value: String,
 }
 
-/// Canonical preimage bytes for the commit-reveal check. The client MUST produce
-/// byte-identical input: `salt` followed by the MessagePack encoding of the
-/// 2-tuple `(attributes, image_uri)`.
-pub fn reveal_preimage(
-    salt: &[u8; 32],
-    attributes: &[NftAttribute],
-    image_uri: &str,
-) -> ExternResult<Vec<u8>> {
-    let mut preimage = salt.to_vec();
-    let tail = holochain_serialized_bytes::encode(&(attributes, image_uri))
-        .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("encode reveal preimage: {e:?}"))))?;
-    preimage.extend(tail);
-    Ok(preimage)
+/// Canonical preimage bytes for the commit-reveal check.
+///
+/// Layout (every length is a little-endian `u32`):
+/// ```text
+///   salt[32]
+///   attributes.len()
+///   for each attribute:  trait_type.len() ‖ trait_type (utf-8)
+///                        value.len()      ‖ value (utf-8)
+///   image_uri.len() ‖ image_uri (utf-8)
+/// ```
+/// Deliberately NOT a serde/msgpack encoding — a hand-rolled, length-prefixed
+/// format so a TypeScript client can reproduce it byte-for-byte without matching
+/// any library's serialization quirks. See `client/src/commitment.ts`.
+pub fn reveal_preimage(salt: &[u8; 32], attributes: &[NftAttribute], image_uri: &str) -> Vec<u8> {
+    fn put(buf: &mut Vec<u8>, bytes: &[u8]) {
+        buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        buf.extend_from_slice(bytes);
+    }
+    let mut buf = Vec::with_capacity(32 + 4 + image_uri.len() + 8);
+    buf.extend_from_slice(salt);
+    buf.extend_from_slice(&(attributes.len() as u32).to_le_bytes());
+    for a in attributes {
+        put(&mut buf, a.trait_type.as_bytes());
+        put(&mut buf, a.value.as_bytes());
+    }
+    put(&mut buf, image_uri.as_bytes());
+    buf
 }
 
 /// blake2b-256 of `bytes`, as a fixed array. Uses `holo_hash`'s pure-Rust
@@ -123,8 +137,25 @@ pub fn validate_update_nft_manifest(
             "only the minter may reveal".into(),
         ));
     }
+    // Branching a reveal off an already-revealed manifest.
     if !matches!(original_nft.payload, NftPayload::Sealed) {
         return Ok(ValidateCallbackResult::Invalid("NFT already revealed".into()));
+    }
+    // Branching a second reveal directly off the sealed mint. The minter's own
+    // chain is strictly ordered, so a prior Update targeting this same mint action
+    // means the NFT is already revealed.
+    let mint_hash = action.data.original_action_address.clone();
+    let prev = action
+        .prev_action()
+        .ok_or_else(|| wasm_error!(WasmErrorInner::Guest("reveal has no prev_action".into())))?
+        .clone();
+    let activity = must_get_agent_activity(action.author().clone(), ChainFilter::new(prev))?;
+    for a in activity.iter() {
+        if let ActionData::Update(u) = &a.action.action().data {
+            if u.original_action_address == mint_hash {
+                return Ok(ValidateCallbackResult::Invalid("NFT already revealed".into()));
+            }
+        }
     }
     if nft.metadata_hash != original_nft.metadata_hash {
         return Ok(ValidateCallbackResult::Invalid(
@@ -141,7 +172,7 @@ pub fn validate_update_nft_manifest(
             "an update must reveal, not stay Sealed".into(),
         ));
     };
-    let computed = commit_hash(&reveal_preimage(&salt, attributes, image_uri)?);
+    let computed = commit_hash(&reveal_preimage(&salt, attributes, image_uri));
     if computed != nft.metadata_hash {
         return Ok(ValidateCallbackResult::Invalid(
             "revealed metadata does not match the mint commitment".into(),

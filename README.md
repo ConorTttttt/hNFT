@@ -63,7 +63,9 @@ cargo test                             # Sweettest suite (needs the .dna packed)
   `hdi = 0.8.0` / `hdk = 0.7.0` (no warnings).
 - ✅ `cargo build --target wasm32-unknown-unknown` — both zomes link to wasm
   (stock command inside `nix develop`).
-- ✅ **Sweettest — 7/7 passing** (`nix develop`, holochain 0.7.0), `tests/flows.rs`:
+- ✅ **Sweettest — 13/13 passing** (`nix develop`, holochain 0.7.0).
+
+  `tests/flows.rs` (7):
   - `mint_and_reveal` — commit-reveal accepts the true preimage, rejects a wrong salt.
   - `full_transfer_updates_ownership_and_provenance` — commitment→receipt flips
     `current_owner` to the buyer, provenance = one hop (seq 1), seller can't re-offer.
@@ -72,18 +74,39 @@ cargo test                             # Sweettest suite (needs the .dna packed)
   - `max_supply_cap_is_enforced_for_a_single_minter` — the `must_get_agent_activity`
     walk + entry-type filter reject the (cap+1)-th mint.
   - `reveal_is_minter_only_and_single_shot` — non-minter reveal rejected; second
-    reveal rejected.
+    reveal (branched off the first reveal) rejected.
   - `transfer_window_bounds_accept_and_cancel` — cancel-before-window rejected,
     cancel-after-window accepted, freed state re-offered and accepted.
   - `accept_after_window_is_rejected` — buyer's accept past the window rejected.
+
+  `tests/edge.rs` (6):
+  - `wrong_agent_cannot_accept` — non-recipient's accept fails; named buyer's succeeds.
+  - `double_accept_is_rejected` — a commitment can't be accepted twice.
+  - `drop_stale_ownership_link_removes_only_the_sellers_index_entry` — dropping the
+    stale index link leaves the buyer's view and the provenance chain untouched.
+  - `provenance_visible_to_an_uninvolved_third_party` — a non-party reads
+    provenance / owner / wallet from the DHT.
+  - `cancel_by_non_offerer_is_rejected` — only the offerer may cancel, even after the window.
+  - `reveal_cannot_be_repeated_by_branching_off_the_mint` — a second Update branched
+    off the sealed mint is rejected.
 
 Every architecture-doc §7 item is confirmed at runtime: the `must_get_agent_activity`
 + `is_create_of` cap walk, `ChainFilter::new` prefix extent, `Timestamp::as_micros`
 window comparison (accept vs cancel deterministically disjoint), and the
 `LinkTag` ⇄ `ActionHash` (`try_from_raw_39`) round-trip.
 
+The commit-reveal preimage is a hand-rolled length-prefixed encoding (not
+`holochain_serialized_bytes`), so the TypeScript client reproduces it exactly —
+see `client/`.
+
 Run the suite with `--test-threads=1` — the window tests use real `sleep`, so the
-run takes ~2 min.
+full run takes ~4 min.
+
+## TypeScript client
+
+[`client/`](client/) — typed `@holochain/client` wrappers plus the commit-reveal
+hashing the UI needs. `cd client && npm install && npm run typecheck`. See
+[client/README.md](client/README.md).
 
 ## Design B (countersigning) — not implemented
 

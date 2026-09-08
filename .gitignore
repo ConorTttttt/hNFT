@@ -27,3 +27,4 @@
 
 # local test output
 *.log
+dist/

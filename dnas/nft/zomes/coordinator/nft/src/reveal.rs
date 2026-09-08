@@ -39,7 +39,7 @@ pub fn reveal_nft(input: RevealNftInput) -> ExternResult<Record> {
         &input.salt,
         &input.attributes,
         &input.image_uri,
-    )?);
+    ));
     if computed != original_manifest.metadata_hash {
         return Err(wasm_error!(WasmErrorInner::Guest(
             "revealed metadata does not match the mint commitment".into()

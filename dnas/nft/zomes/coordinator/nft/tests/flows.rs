@@ -20,7 +20,7 @@ async fn mint_and_reveal() {
         value: "cobalt".into(),
     }];
     let image_uri = "ipfs://demo".to_string();
-    let commitment = commit_hash(&reveal_preimage(&salt, &attributes, &image_uri).unwrap());
+    let commitment = commit_hash(&reveal_preimage(&salt, &attributes, &image_uri));
 
     let minted: MintNftOutput = c
         .call(
@@ -268,7 +268,7 @@ async fn reveal_is_minter_only_and_single_shot() {
     let salt = [3u8; 32];
     let attributes = vec![NftAttribute { trait_type: "hue".into(), value: "amber".into() }];
     let image_uri = "ipfs://x".to_string();
-    let commitment = commit_hash(&reveal_preimage(&salt, &attributes, &image_uri).unwrap());
+    let commitment = commit_hash(&reveal_preimage(&salt, &attributes, &image_uri));
 
     let minted: MintNftOutput = ca
         .call(&za, "mint_nft", MintNftInput { metadata_hash: commitment })
