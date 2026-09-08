@@ -1,0 +1,22 @@
+[package]
+name = "nft"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "nft"
+
+[dependencies]
+hdk = { workspace = true }
+serde = { workspace = true }
+holochain_serialized_bytes = { workspace = true }
+
+nft_integrity = { workspace = true }
+
+# Design A does NOT use countersigning — no `unstable-countersigning` feature,
+# so this builds and runs on stock holonix / Kangaroo conductors.
+
+[dev-dependencies]
+holochain = { workspace = true, features = ["wasmer-sys-cranelift", "test_utils"] }
+tokio = { workspace = true }

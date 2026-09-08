@@ -1,0 +1,27 @@
+manifest_version: '0'
+name: nft
+integrity:
+  network_seed: null
+  # Dev / CI defaults. Production collections override these at clone-create time
+  # (or via `hc sandbox` / Sweettest `DnaModifiersOpt::with_properties`).
+  #   max_supply: 0        -> unlimited (cap not enforced)
+  #   minter_pubkey: null  -> open minting (no minter authority; dev only)
+  properties:
+    name: "Dev Collection"
+    symbol: "DEV"
+    max_supply: 0
+    minter_pubkey: null
+    royalty_bps: 0
+    transfer_window_secs: 300
+  zomes:
+  - name: nft_integrity
+    hash: null
+    path: ../../../target/wasm32-unknown-unknown/release/nft_integrity.wasm
+    dependencies: null
+coordinator:
+  zomes:
+  - name: nft
+    hash: null
+    path: ../../../target/wasm32-unknown-unknown/release/nft.wasm
+    dependencies:
+    - name: nft_integrity

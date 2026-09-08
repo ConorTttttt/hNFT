@@ -1,0 +1,37 @@
+[profile.dev]
+opt-level = "z"
+
+[profile.release]
+opt-level = "z"
+
+# Keep peak RAM down when compiling the `holochain` conductor for Sweettests.
+# Debug info is the single biggest memory hog for large crates; turn it off, and
+# don't over-optimise dependencies in the test build.
+[profile.test]
+debug = 0
+opt-level = 0
+
+[profile.dev.package."*"]
+debug = 0
+opt-level = 1
+
+[workspace]
+members = ["dnas/*/zomes/coordinator/*", "dnas/*/zomes/integrity/*"]
+resolver = "2"
+
+[workspace.dependencies]
+hdi = "=0.8.0"
+hdk = "=0.7.0"
+holochain_serialized_bytes = "*"
+serde = "1.0"
+tokio = "1.49"
+
+[workspace.dependencies.holochain]
+default-features = false
+version = "0.7.0"
+
+[workspace.dependencies.nft]
+path = "dnas/nft/zomes/coordinator/nft"
+
+[workspace.dependencies.nft_integrity]
+path = "dnas/nft/zomes/integrity/nft"

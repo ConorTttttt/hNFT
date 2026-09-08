@@ -1,0 +1,15 @@
+[package]
+name = "nft_integrity"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "nft_integrity"
+
+[dependencies]
+hdi = { workspace = true }
+serde = { workspace = true }
+holochain_serialized_bytes = { workspace = true }
+# Commit-reveal hashing uses `holo_hash::blake2b_256` (re-exported via hdi's
+# prelude) — pure Rust, deterministic, available inside validate().

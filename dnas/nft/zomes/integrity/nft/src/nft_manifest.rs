@@ -1,0 +1,174 @@
+use crate::dna_properties::CollectionProperties;
+use crate::UnitEntryTypes;
+use hdi::prelude::*;
+
+/// The NFT. Its identity is the hash of its original Create action — never a field
+/// in here. Minter and mint time are on the Create action header. Ownership is
+/// derived from the transfer provenance chain, never stored here.
+#[derive(Clone, PartialEq)]
+#[hdk_entry_helper]
+pub struct NftManifest {
+    /// Commitment: `blake2b_256(salt || canonical_bytes(attributes, image_uri))`.
+    /// Immutable across the Sealed -> Revealed update.
+    pub metadata_hash: [u8; 32],
+    /// `Sealed` at mint; flipped to `Revealed` exactly once via `update_entry`.
+    pub payload: NftPayload,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum NftPayload {
+    Sealed,
+    Revealed {
+        salt: [u8; 32],
+        attributes: Vec<NftAttribute>,
+        image_uri: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct NftAttribute {
+    pub trait_type: String,
+    pub value: String,
+}
+
+/// Canonical preimage bytes for the commit-reveal check. The client MUST produce
+/// byte-identical input: `salt` followed by the MessagePack encoding of the
+/// 2-tuple `(attributes, image_uri)`.
+pub fn reveal_preimage(
+    salt: &[u8; 32],
+    attributes: &[NftAttribute],
+    image_uri: &str,
+) -> ExternResult<Vec<u8>> {
+    let mut preimage = salt.to_vec();
+    let tail = holochain_serialized_bytes::encode(&(attributes, image_uri))
+        .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("encode reveal preimage: {e:?}"))))?;
+    preimage.extend(tail);
+    Ok(preimage)
+}
+
+/// blake2b-256 of `bytes`, as a fixed array. Uses `holo_hash`'s pure-Rust
+/// implementation, which is available and deterministic inside `validate()`.
+pub fn commit_hash(bytes: &[u8]) -> [u8; 32] {
+    let v = holo_hash::blake2b_256(bytes);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&v);
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+pub fn validate_create_nft_manifest(
+    action: TypedAction<EntryCreationData>,
+    nft: NftManifest,
+) -> ExternResult<ValidateCallbackResult> {
+    let props = CollectionProperties::get()?;
+
+    // 1. Minter authority (progenitor pattern). `None` => dev mode, no restriction.
+    if let Some(minter_str) = props.minter_pubkey.as_ref() {
+        let minter = AgentPubKey::try_from(minter_str.clone())
+            .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("bad minter_pubkey: {e:?}"))))?;
+        if action.author() != &minter {
+            return Ok(ValidateCallbackResult::Invalid(
+                "only the collection minter may mint".into(),
+            ));
+        }
+    }
+
+    // 2. Must mint Sealed, with a real commitment.
+    if !matches!(nft.payload, NftPayload::Sealed) {
+        return Ok(ValidateCallbackResult::Invalid("NFT must be minted Sealed".into()));
+    }
+    if nft.metadata_hash == [0u8; 32] {
+        return Ok(ValidateCallbackResult::Invalid("metadata_hash must not be zero".into()));
+    }
+
+    // 3. max_supply. Enforceable only because a single minter's own source chain is
+    //    strictly ordered by construction — no network race is possible against
+    //    yourself. Walk the minter's chain from this mint's predecessor and count
+    //    prior NftManifest creates. `must_get_agent_activity` DEFERS on an
+    //    incomplete chain (UnresolvedDependencies) rather than failing, so
+    //    validators converge; a forked minter chain produces a warrant.
+    if props.minter_pubkey.is_some() && props.max_supply > 0 {
+        let prev = action
+            .prev_action()
+            .ok_or_else(|| wasm_error!(WasmErrorInner::Guest("mint has no prev_action".into())))?
+            .clone();
+        let activity = must_get_agent_activity(action.author().clone(), ChainFilter::new(prev))?;
+        let minted_so_far = activity
+            .iter()
+            .filter(|a| is_nft_manifest_create(a.action.action()))
+            .count() as u32;
+        if minted_so_far >= props.max_supply {
+            return Ok(ValidateCallbackResult::Invalid(
+                "collection max_supply reached".into(),
+            ));
+        }
+    }
+
+    Ok(ValidateCallbackResult::Valid)
+}
+
+/// Reveal: the sole permitted update to an `NftManifest`.
+pub fn validate_update_nft_manifest(
+    action: TypedAction<UpdateData>,
+    nft: NftManifest,
+    original_action: TypedAction<EntryCreationData>,
+    original_nft: NftManifest,
+) -> ExternResult<ValidateCallbackResult> {
+    if action.author() != original_action.author() {
+        return Ok(ValidateCallbackResult::Invalid(
+            "only the minter may reveal".into(),
+        ));
+    }
+    if !matches!(original_nft.payload, NftPayload::Sealed) {
+        return Ok(ValidateCallbackResult::Invalid("NFT already revealed".into()));
+    }
+    if nft.metadata_hash != original_nft.metadata_hash {
+        return Ok(ValidateCallbackResult::Invalid(
+            "metadata_hash may not change on reveal".into(),
+        ));
+    }
+    let NftPayload::Revealed {
+        salt,
+        ref attributes,
+        ref image_uri,
+    } = nft.payload
+    else {
+        return Ok(ValidateCallbackResult::Invalid(
+            "an update must reveal, not stay Sealed".into(),
+        ));
+    };
+    let computed = commit_hash(&reveal_preimage(&salt, attributes, image_uri)?);
+    if computed != nft.metadata_hash {
+        return Ok(ValidateCallbackResult::Invalid(
+            "revealed metadata does not match the mint commitment".into(),
+        ));
+    }
+    Ok(ValidateCallbackResult::Valid)
+}
+
+/// True iff `action` is a `Create` of the given unit entry type in this zome.
+///
+/// NOTE (architecture doc §7.1): the exact accessor for the expected
+/// `(ZomeIndex, EntryDefIndex)` of a unit entry type is unconfirmed against
+/// `hdi 0.8` — verify `ScopedEntryDefIndex::try_from(UnitEntryTypes::_)` and the
+/// `entry_type()` shape with a Sweettest before relying on this.
+pub fn is_create_of(action: &Action, unit: UnitEntryTypes) -> bool {
+    if !matches!(action.action_type(), ActionType::Create) {
+        return false;
+    }
+    let Some(EntryType::App(app_entry_def)) = action.entry_type() else {
+        return false;
+    };
+    let Ok(scoped) = ScopedEntryDefIndex::try_from(unit) else {
+        return false;
+    };
+    app_entry_def.zome_index == scoped.zome_index && app_entry_def.entry_index == scoped.zome_type
+}
+
+pub fn is_nft_manifest_create(action: &Action) -> bool {
+    is_create_of(action, UnitEntryTypes::NftManifest)
+}

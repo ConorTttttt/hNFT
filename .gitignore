@@ -1,0 +1,29 @@
+# editors
+/.idea
+/.vscode
+
+# system files
+.DS_Store
+
+# build
+/dist/
+/target/
+/.cargo/
+
+# package manager
+/**/node_modules/
+/.yarn
+
+# generated and compiled files
+*.happ
+*.webhapp
+*.zip
+*.dna
+
+# temporary files
+.hc*
+.running
+.hc
+
+# local test output
+*.log

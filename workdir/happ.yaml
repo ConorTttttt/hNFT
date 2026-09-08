@@ -1,0 +1,21 @@
+manifest_version: '0'
+name: p2p_art_marketplace
+description: "P2P Art Marketplace — agent-centric NFT hApp. One DNA per collection, provisioned as clone cells."
+roles:
+- name: nft
+  provisioning:
+    strategy: create
+    deferred: false
+  dna:
+    path: ../dnas/nft/workdir/nft.dna
+    modifiers:
+      network_seed: null
+      properties: null
+    installed_hash: null
+    # Each art collection is a runtime clone of this role with its own
+    # CollectionProperties (name / symbol / max_supply / minter_pubkey) and
+    # network_seed. See references/cell-cloning.md.
+    clone_limit: 256
+allow_deferred_memproofs: false
+bootstrap_url: null
+relay_url: null

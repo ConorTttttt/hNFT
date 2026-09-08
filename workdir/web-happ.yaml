@@ -1,0 +1,7 @@
+---
+manifest_version: "0"
+name: p2p_art_marketplace
+ui:
+  path: ~
+happ:
+  path: "./p2p_art_marketplace.happ"
