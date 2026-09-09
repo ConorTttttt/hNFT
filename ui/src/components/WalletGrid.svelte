@@ -1,6 +1,7 @@
 <script lang="ts">
   import { useAppState } from "$lib/appState.svelte";
   import { b64 } from "$lib/format";
+  import DraftShelf from "./DraftShelf.svelte";
   import NftCard from "./NftCard.svelte";
 
   let { onmint }: { onmint: () => void } = $props();
@@ -8,7 +9,9 @@
   const app = useAppState();
 </script>
 
-<div class="stack">
+<div class="stack" style="gap: 1.25rem">
+  <DraftShelf />
+
   <h3>
     My Collection {#if app.myNfts.length}<span class="faint">· {app.myNfts.length}</span>{/if}
   </h3>

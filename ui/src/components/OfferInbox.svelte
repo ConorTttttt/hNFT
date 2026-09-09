@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { InboundOffer } from "$lib/appState.svelte";
   import { useAppState } from "$lib/appState.svelte";
-  import { b64 } from "$lib/format";
+  import { b64, eqHash } from "$lib/format";
   import AgentBadge from "./AgentBadge.svelte";
   import Countdown from "./Countdown.svelte";
 
@@ -12,6 +12,19 @@
     const id = setInterval(() => (now = Date.now()), 1000);
     return () => clearInterval(id);
   });
+
+  // Scroll to (and flash) an offer when a "new offer" toast navigates here.
+  let listEl = $state<HTMLElement>();
+  $effect(() => {
+    const target = app.highlightOffer;
+    if (!target || !listEl) return;
+    listEl
+      .querySelector(`[data-commitment="${b64(target)}"]`)
+      ?.scrollIntoView({ block: "center", behavior: "smooth" });
+  });
+
+  const highlighted = (c: Uint8Array) =>
+    !!app.highlightOffer && eqHash(c, app.highlightOffer);
 
   const isActive = (o: InboundOffer) =>
     !o.hidden && o.status === "pending" && now < o.deadlineMs;
@@ -30,7 +43,7 @@
   }
 </script>
 
-<div class="stack">
+<div class="stack" bind:this={listEl}>
   <h3>
     Pending offers {#if active.length}<span class="faint">· {active.length}</span>{/if}
   </h3>
@@ -40,7 +53,11 @@
   {:else}
     <div class="stack tight">
       {#each active as o (b64(o.commitment))}
-        <div class="offer">
+        <div
+          class="offer"
+          class:flash={highlighted(o.commitment)}
+          data-commitment={b64(o.commitment)}
+        >
           {#if o.imageUri}
             <img class="thumb-xs" src={o.imageUri} alt="" />
           {:else}
@@ -75,7 +92,11 @@
       <div class="stack tight" style="margin-top: 0.5rem">
         {#each resolved as o (b64(o.commitment))}
           {@const expired = now >= o.deadlineMs}
-          <div class="offer dim">
+          <div
+            class="offer dim"
+            class:flash={highlighted(o.commitment)}
+            data-commitment={b64(o.commitment)}
+          >
             {#if o.imageUri}
               <img class="thumb-xs" src={o.imageUri} alt="" />
             {:else}
@@ -119,6 +140,19 @@
   }
   .offer.dim {
     opacity: 0.7;
+  }
+  .offer.flash {
+    animation: flash 1.6s ease 2;
+  }
+  @keyframes flash {
+    0%,
+    100% {
+      border-color: var(--border);
+    }
+    30% {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 25%, transparent);
+    }
   }
   .resolved summary {
     cursor: pointer;

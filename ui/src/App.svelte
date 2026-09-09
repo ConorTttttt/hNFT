@@ -13,7 +13,6 @@
   let phase = $state<"connecting" | "ready" | "error">("connecting");
   let errMsg = $state("");
   let app = $state<AppState | null>(null);
-  let view = $state<"collection" | "activity">("collection");
   let showMint = $state(false);
 
   function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -79,11 +78,11 @@
     </div>
 
     <nav class="nav">
-      <button class:active={view === "collection"} onclick={() => (view = "collection")}>
+      <button class:active={a.view === "collection"} onclick={() => (a.view = "collection")}>
         Collection
       </button>
       <button disabled title="needs a get_all_nfts coordinator fn">Discover</button>
-      <button class:active={view === "activity"} onclick={() => (view = "activity")}>
+      <button class:active={a.view === "activity"} onclick={() => (a.view = "activity")}>
         Activity
         {#if a.pendingOfferCount}<span class="count">{a.pendingOfferCount}</span>{/if}
       </button>
@@ -112,7 +111,7 @@
   </header>
 
   <main class="workspace">
-    {#if view === "collection"}
+    {#if a.view === "collection"}
       <WalletGrid onmint={() => (showMint = true)} />
     {:else}
       <ActivityFeed />

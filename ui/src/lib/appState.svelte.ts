@@ -17,10 +17,11 @@ import {
   type RemoteSignal,
   type TransferCommitment,
 } from "@p2p-art-marketplace/client";
-import { b64, eqHash, nftTitle, shortHash, tsToMs } from "./format";
+import { b64, eqHash, nftTitle, shortHash, tsToMs, unb64 } from "./format";
 import { toast } from "./toast.svelte";
 import {
   hasCommitment,
+  listCommitments,
   loadCommitment,
   markRevealed,
   saveCommitment,
@@ -57,6 +58,14 @@ export interface ActivityItem {
   at: number;
   kind: "info" | "success";
   text: string;
+}
+
+/** An NFT this device minted whose metadata it can still reveal, whoever owns it now. */
+export interface DraftView {
+  nft: ActionHash;
+  title: string;
+  imageUri: string;
+  ownedByOther: boolean;
 }
 
 export interface NftDetail {
@@ -120,8 +129,15 @@ export class AppState {
   collection = $state<CollectionInfo | null>(null);
   isMinter = $state(false);
 
+  /** Which top-level view is showing; owned here so signals can navigate. */
+  view = $state<"collection" | "activity">("collection");
+  /** Commitment to flash in the offers list (set from a "new offer" toast). */
+  highlightOffer = $state<ActionHash | null>(null);
+
   myNfts = $state<NftView[]>([]);
   myNftsLoading = $state(false);
+  /** NFTs this device minted that are still sealed — revealable regardless of ownership. */
+  drafts = $state<DraftView[]>([]);
 
   inbox = $state<InboundOffer[]>([]);
   inboxLoading = $state(false);
@@ -139,9 +155,13 @@ export class AppState {
 
   private dismissed = loadDismissed();
   private activitySeq = 0;
+  private highlightTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly unsub: () => void;
   private peerTimer: ReturnType<typeof setInterval> | null = null;
-  private readonly refreshWallet = new Debounced(() => void this.loadMyNfts());
+  private readonly refreshWallet = new Debounced(() => {
+    void this.loadMyNfts();
+    void this.loadDrafts();
+  });
   private readonly refreshInbox = new Debounced(() => void this.loadInbox());
   private readonly refreshDetail = new Debounced(() => {
     if (this.detailNft) void this.loadDetail(this.detailNft);
@@ -167,12 +187,54 @@ export class AppState {
     }
     void this.pollPeers();
     this.peerTimer = setInterval(() => void this.pollPeers(), 6000);
-    await Promise.all([this.loadMyNfts(), this.loadInbox()]);
+    await Promise.all([this.loadMyNfts(), this.loadInbox(), this.loadDrafts()]);
   }
 
   dispose(): void {
     this.unsub();
     if (this.peerTimer) clearInterval(this.peerTimer);
+    if (this.highlightTimer) clearTimeout(this.highlightTimer);
+  }
+
+  /** Jump to the Activity view and flash the given offer for a few seconds. */
+  goToOffer(commitment: ActionHash): void {
+    this.view = "activity";
+    this.highlightOffer = commitment;
+    this.refreshInbox.trigger();
+    if (this.highlightTimer) clearTimeout(this.highlightTimer);
+    this.highlightTimer = setTimeout(() => (this.highlightOffer = null), 4000);
+  }
+
+  /** NFTs this device minted whose reveal salt we still hold and that are still sealed. */
+  async loadDrafts(): Promise<void> {
+    try {
+      const stored = (await listCommitments()).filter((c) => c.revealedAt === null);
+      const views = await Promise.all(
+        stored.map(async (c) => {
+          const nft = unb64(c.nftB64);
+          const rec = await this.nft.getNft(nft).catch(() => null);
+          if (!rec) return null;
+          const m = decodeNftManifest(rec);
+          if (m.payload.status !== "sealed") {
+            await markRevealed(nft); // revealed elsewhere — drop it from the shelf
+            return null;
+          }
+          const owner = await this.nft.currentOwner(nft).catch(() => this.me);
+          const name = c.attributes.find(
+            (a) => a.trait_type.trim().toLowerCase() === "name",
+          )?.value;
+          return {
+            nft,
+            title: name?.trim() || "Sealed NFT",
+            imageUri: c.imageUri,
+            ownedByOther: !eqHash(owner, this.me),
+          } satisfies DraftView;
+        }),
+      );
+      this.drafts = views.filter((v): v is DraftView => v !== null);
+    } catch (e) {
+      this.error = String(e);
+    }
   }
 
   private async pollPeers(): Promise<void> {
@@ -232,11 +294,15 @@ export class AppState {
 
   private onSignal(s: RemoteSignal | LocalSignal): void {
     switch (s.type) {
-      case "TransferOffered":
-        toast.info("New transfer offer");
+      case "TransferOffered": {
+        const commitment = s.commitment;
+        toast.info("New transfer offer — open it", () =>
+          this.goToOffer(commitment),
+        );
         this.log("info", "Received a transfer offer");
         this.refreshInbox.trigger();
         break;
+      }
       case "TransferAccepted":
         toast.success("Your offer was accepted");
         this.log("success", "A transfer you offered was accepted");
@@ -400,7 +466,7 @@ export class AppState {
       // DHT propagation to peers happens asynchronously from here.
       toast.success("Minted — publishing to peers…");
       this.log("success", `Minted ${shortHash(out.nft)} (sealed)`);
-      await this.loadMyNfts();
+      await Promise.all([this.loadMyNfts(), this.loadDrafts()]);
       return out.nft;
     } catch (e) {
       toast.error(`Mint failed: ${errText(e)}`);
@@ -425,7 +491,11 @@ export class AppState {
         imageUri: stored.imageUri,
       });
       await markRevealed(nft);
-      await Promise.all([this.loadMyNfts(), this.loadDetail(nft)]);
+      await Promise.all([
+        this.loadMyNfts(),
+        this.loadDrafts(),
+        this.loadDetail(nft),
+      ]);
       toast.success("Metadata revealed");
       this.log("success", `Revealed ${shortHash(nft)}`);
     } catch (e) {
