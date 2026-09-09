@@ -20,11 +20,29 @@ UI_PORT="${UI_PORT:-1420}"
 AGENTS="${AGENTS:-2}"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-# Ubuntu (and other distros with unprivileged-userns restrictions) refuse to run
-# Electron's SUID sandbox unless node_modules/electron/dist/chrome-sandbox is
-# owned by root with mode 4755. For a local dev tool the sane fix is to disable
-# the sandbox rather than chase setuid perms that reset on every npm install.
-export ELECTRON_DISABLE_SANDBOX=1
+# Electron's SUID sandbox needs node_modules/electron/dist/chrome-sandbox owned
+# by root with mode 4755, or Ubuntu's unprivileged-userns restriction aborts the
+# launch. Disabling the sandbox instead (ELECTRON_DISABLE_SANDBOX=1) *also* stops
+# hc-spin's preload from injecting window.__HC_LAUNCHER_ENV__, so the UI can't
+# find the conductor. So: use the real sandbox when it's set up, and if it isn't,
+# tell the user how to fix it (one-time sudo) rather than silently disabling it.
+CHROME_SANDBOX="$PWD/node_modules/electron/dist/chrome-sandbox"
+if [ -e "$CHROME_SANDBOX" ] && [ "$(stat -c '%u %a' "$CHROME_SANDBOX")" != "0 4755" ]; then
+  cat >&2 <<EOF
+
+  Electron's sandbox helper isn't set up. Run this once (needs sudo), then retry:
+
+    sudo chown root:root "$CHROME_SANDBOX"
+    sudo chmod 4755 "$CHROME_SANDBOX"
+
+  (Re-run after any 'npm install' under node_modules/electron.)
+  To skip the sandbox instead — the UI then can't connect — set
+  HC_SPIN_NO_SANDBOX=1 and expect to pass --admin-port / VITE_HC_ADMIN_PORT.
+
+EOF
+  [ "${HC_SPIN_NO_SANDBOX:-}" = "1" ] || exit 1
+fi
+[ "${HC_SPIN_NO_SANDBOX:-}" = "1" ] && export ELECTRON_DISABLE_SANDBOX=1
 
 # Go through XWayland: native Wayland + Electron's Vulkan path produces a
 # "not compatible with Vulkan" warning and, on some GPUs, a black window.
