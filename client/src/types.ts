@@ -10,6 +10,17 @@ export interface NftAttribute {
   value: string;
 }
 
+/** DNA `modifiers.properties` for this collection cell (from `collection_info`). */
+export interface CollectionInfo {
+  name: string;
+  symbol: string;
+  max_supply: number;
+  /** base64 AgentPubKey, or `null` for open (dev) minting. */
+  minter_pubkey: string | null;
+  royalty_bps: number;
+  transfer_window_secs: number;
+}
+
 /** Discriminated on `status` (Rust `#[serde(tag = "status", rename_all = "snake_case")]`). */
 export type NftPayload =
   | { status: "sealed" }

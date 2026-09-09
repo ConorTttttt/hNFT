@@ -1,6 +1,13 @@
 use hdk::prelude::*;
 use nft_integrity::*;
 
+/// This collection's configuration, read from DNA `modifiers.properties`. UIs need
+/// `transfer_window_secs` (offer countdown) and `name` / `symbol` / `max_supply`.
+#[hdk_extern]
+pub fn collection_info(_: ()) -> ExternResult<CollectionProperties> {
+    CollectionProperties::get()
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GetNftsForAgentInput {
     pub agent: AgentPubKey,

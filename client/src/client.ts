@@ -8,6 +8,7 @@ import { SignalType } from "@holochain/client";
 import { decode } from "@msgpack/msgpack";
 import type { Commitment } from "./commitment.js";
 import type {
+  CollectionInfo,
   LocalSignal,
   MintNftOutput,
   NftManifest,
@@ -48,6 +49,13 @@ export class NftClient {
       fn_name,
       payload,
     }) as Promise<T>;
+  }
+
+  // --- collection ------------------------------------------------------------
+
+  /** This collection's config (name, symbol, `max_supply`, `transfer_window_secs`, …). */
+  collectionInfo(): Promise<CollectionInfo> {
+    return this.call("collection_info", null);
   }
 
   // --- minting --------------------------------------------------------------
