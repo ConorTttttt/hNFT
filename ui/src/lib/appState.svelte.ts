@@ -36,6 +36,8 @@ export interface NftView {
   owner: AgentPubKey;
   /** Is the reveal commitment stored on this device? */
   hasSalt: boolean;
+  /** Hidden from the collection view on this device (localStorage). */
+  hidden: boolean;
 }
 
 export interface InboundOffer {
@@ -112,12 +114,20 @@ class Debounced {
 }
 
 const DISMISSED_KEY = "p2p-art:dismissed-offers";
+const HIDDEN_NFTS_KEY = "p2p-art:hidden-nfts";
 
-function loadDismissed(): Set<string> {
+function loadStringSet(key: string): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]"));
+    return new Set(JSON.parse(localStorage.getItem(key) ?? "[]"));
   } catch {
     return new Set();
+  }
+}
+function persistStringSet(key: string, set: Set<string>): void {
+  try {
+    localStorage.setItem(key, JSON.stringify([...set]));
+  } catch {
+    /* private mode — session-only */
   }
 }
 
@@ -153,7 +163,8 @@ export class AppState {
 
   error = $state<string | null>(null);
 
-  private dismissed = loadDismissed();
+  private dismissed = loadStringSet(DISMISSED_KEY);
+  private hiddenNfts = loadStringSet(HIDDEN_NFTS_KEY);
   private activitySeq = 0;
   private highlightTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly unsub: () => void;
@@ -251,15 +262,7 @@ export class AppState {
     if (this.activity.length > 60) this.activity.length = 60;
   }
 
-  private persistDismissed(): void {
-    try {
-      localStorage.setItem(DISMISSED_KEY, JSON.stringify([...this.dismissed]));
-    } catch {
-      /* private mode — dismissal is session-only */
-    }
-  }
-
-  private applyHidden(): void {
+  private applyOfferHidden(): void {
     this.inbox = this.inbox.map((o) => ({
       ...o,
       hidden: this.dismissed.has(b64(o.commitment)),
@@ -268,14 +271,39 @@ export class AppState {
 
   dismissOffer(commitment: ActionHash): void {
     this.dismissed.add(b64(commitment));
-    this.persistDismissed();
-    this.applyHidden();
+    persistStringSet(DISMISSED_KEY, this.dismissed);
+    this.applyOfferHidden();
   }
 
   restoreOffer(commitment: ActionHash): void {
     this.dismissed.delete(b64(commitment));
-    this.persistDismissed();
-    this.applyHidden();
+    persistStringSet(DISMISSED_KEY, this.dismissed);
+    this.applyOfferHidden();
+  }
+
+  // --- hiding NFTs from the collection view (this device only) ---------------
+
+  isNftHidden(nft: ActionHash): boolean {
+    return this.hiddenNfts.has(b64(nft));
+  }
+
+  private applyNftHidden(): void {
+    this.myNfts = this.myNfts.map((v) => ({
+      ...v,
+      hidden: this.hiddenNfts.has(b64(v.nft)),
+    }));
+  }
+
+  hideNft(nft: ActionHash): void {
+    this.hiddenNfts.add(b64(nft));
+    persistStringSet(HIDDEN_NFTS_KEY, this.hiddenNfts);
+    this.applyNftHidden();
+  }
+
+  unhideNft(nft: ActionHash): void {
+    this.hiddenNfts.delete(b64(nft));
+    persistStringSet(HIDDEN_NFTS_KEY, this.hiddenNfts);
+    this.applyNftHidden();
   }
 
   isMe(who: AgentPubKey): boolean {
@@ -352,6 +380,7 @@ export class AppState {
             minter: r.signed_action.hashed.content.header.author,
             owner,
             hasSalt,
+            hidden: this.hiddenNfts.has(b64(nft)),
           };
           return { view, owned: eqHash(owner, this.me) };
         }),

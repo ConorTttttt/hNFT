@@ -109,10 +109,19 @@
             <RevealFlow {nft} hasSalt={d.hasSalt} />
           {/if}
           {#if iOwn}
-            <div>
+            <div class="row wrap" style="gap: 0.5rem">
               <button class="primary" onclick={() => (showTransfer = true)}>
                 Transfer
               </button>
+              {#if app.isNftHidden(nft)}
+                <button class="ghost" onclick={() => app.unhideNft(nft)}>
+                  Show in collection
+                </button>
+              {:else}
+                <button class="ghost" onclick={() => app.hideNft(nft)}>
+                  Hide from collection
+                </button>
+              {/if}
             </div>
           {/if}
           {#if staleWalletEntry}
