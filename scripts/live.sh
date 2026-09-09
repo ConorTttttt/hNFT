@@ -3,15 +3,15 @@
 # Launch the hApp live: hc-spin opens AGENTS Electron windows (default 2), each
 # loading the Vite dev UI, wired to a fresh multi-agent conductor.
 #
-# This runs on the HOST, not inside `nix develop`, on purpose:
+# Runs on the HOST, not inside `nix develop`, on purpose:
 #   - the bundled Electron (v42) then links against your system GUI libraries
-#     (the same ones VS Code / Chromium already use) instead of a headless
-#     holonix shell that has none;
-#   - the Holochain binaries (holochain, lair-keystore) are pulled from the
+#     (the ones VS Code / Chromium already use) instead of a headless holonix
+#     shell that has none;
+#   - the Holochain binaries (holochain, lair-keystore) are taken from the
 #     holonix store and put on PATH — nix binaries carry their own RPATH, so
 #     they run fine from a plain shell.
 #
-# Usage:  ./scripts/live.sh              # 2 agents, UI on :1420
+# Usage:  ./scripts/live.sh                 # 2 agents, UI on :1420
 #         AGENTS=3 UI_PORT=5000 ./scripts/live.sh
 #
 set -euo pipefail
@@ -19,6 +19,12 @@ set -euo pipefail
 UI_PORT="${UI_PORT:-1420}"
 AGENTS="${AGENTS:-2}"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+# Ubuntu (and other distros with unprivileged-userns restrictions) refuse to run
+# Electron's SUID sandbox unless node_modules/electron/dist/chrome-sandbox is
+# owned by root with mode 4755. For a local dev tool the sane fix is to disable
+# the sandbox rather than chase setuid perms that reset on every npm install.
+export ELECTRON_DISABLE_SANDBOX=1
 
 HAPP="workdir/p2p_art_marketplace.happ"
 if [ ! -f "$HAPP" ]; then
@@ -36,15 +42,21 @@ HOLOCHAIN_BIN="$(command -v holochain)"
 echo "    holochain     : $HOLOCHAIN_BIN"
 echo "    lair-keystore : $(command -v lair-keystore)"
 
+# Free the UI port if a previous run left something on it.
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k "${UI_PORT}/tcp" 2>/dev/null && sleep 1 || true
+fi
+
 echo "==> Starting Vite dev server on :$UI_PORT …"
 npm --prefix ui run dev -- --port "$UI_PORT" --strictPort &
 VITE_PID=$!
-trap 'kill "$VITE_PID" 2>/dev/null || true' EXIT
+cleanup() { kill "$VITE_PID" 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
 
-npx --yes wait-on "tcp:127.0.0.1:$UI_PORT"
+npx --yes wait-on -t 60000 "tcp:127.0.0.1:$UI_PORT"
 
 echo "==> Launching hc-spin with $AGENTS agents…"
-exec npx --yes @holochain/hc-spin \
+npx --yes @holochain/hc-spin \
   -n "$AGENTS" \
   --ui-port "$UI_PORT" \
   --holochain-path "$HOLOCHAIN_BIN" \
