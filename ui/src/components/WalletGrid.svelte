@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { getAppStateContext } from "$lib/context";
+  import { useAppState } from "$lib/appState.svelte";
   import { b64 } from "$lib/format";
   import NftCard from "./NftCard.svelte";
 
-  const app = getAppStateContext();
+  const app = useAppState();
 </script>
 
 <div class="stack">

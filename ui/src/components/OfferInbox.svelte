@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { getAppStateContext } from "$lib/context";
+  import { useAppState } from "$lib/appState.svelte";
   import { b64, shortHash } from "$lib/format";
   import Countdown from "./Countdown.svelte";
 
-  const app = getAppStateContext();
+  const app = useAppState();
 
   let now = $state(Date.now());
   $effect(() => {

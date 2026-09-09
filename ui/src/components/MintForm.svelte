@@ -3,10 +3,10 @@
     prepareCommitment,
     type NftAttribute,
   } from "@p2p-art-marketplace/client";
-  import { getAppStateContext } from "$lib/context";
+  import { useAppState } from "$lib/appState.svelte";
   import { b64 } from "$lib/format";
 
-  const app = getAppStateContext();
+  const app = useAppState();
 
   let attrs = $state<NftAttribute[]>([{ trait_type: "", value: "" }]);
   let imageUri = $state("");

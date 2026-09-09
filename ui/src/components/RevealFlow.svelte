@@ -1,10 +1,10 @@
 <script lang="ts">
   import type { ActionHash } from "@holochain/client";
-  import { getAppStateContext } from "$lib/context";
+  import { useAppState } from "$lib/appState.svelte";
 
   let { nft, hasSalt }: { nft: ActionHash; hasSalt: boolean } = $props();
 
-  const app = getAppStateContext();
+  const app = useAppState();
 
   let busy = $state(false);
   let err = $state("");

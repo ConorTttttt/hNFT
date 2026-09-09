@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { AppState } from "$lib/appState.svelte";
-  import { setAppStateContext } from "$lib/context";
+  import { AppState, setCurrentAppState } from "$lib/appState.svelte";
   import { connectHolochain } from "$lib/holochain";
   import { b64 } from "$lib/format";
   import MintForm from "./components/MintForm.svelte";
@@ -24,7 +23,7 @@
           s.dispose();
           return;
         }
-        setAppStateContext(s);
+        setCurrentAppState(s);
         app = s;
         await s.init();
         if (!cancelled) phase = "ready";
@@ -38,6 +37,7 @@
     return () => {
       cancelled = true;
       s?.dispose();
+      setCurrentAppState(null);
     };
   });
 </script>

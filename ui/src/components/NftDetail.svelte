@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { getAppStateContext } from "$lib/context";
+  import { useAppState } from "$lib/appState.svelte";
   import { b64, eqHash, shortHash } from "$lib/format";
   import ProvenanceTimeline from "./ProvenanceTimeline.svelte";
   import RevealFlow from "./RevealFlow.svelte";
   import TransferDialog from "./TransferDialog.svelte";
 
-  const app = getAppStateContext();
+  const app = useAppState();
 
   let dlg = $state<HTMLDialogElement>();
   let showTransfer = $state(false);

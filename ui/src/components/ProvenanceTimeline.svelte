@@ -1,11 +1,11 @@
 <script lang="ts">
   import type { ProvenanceHop } from "@p2p-art-marketplace/client";
-  import { getAppStateContext } from "$lib/context";
+  import { useAppState } from "$lib/appState.svelte";
   import { shortHash } from "$lib/format";
 
   let { hops }: { hops: ProvenanceHop[] } = $props();
 
-  const app = getAppStateContext();
+  const app = useAppState();
   const who = (k: Uint8Array) => (app.isMe(k) ? "you" : shortHash(k));
 </script>
 

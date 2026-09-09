@@ -52,6 +52,24 @@ export interface NftDetail {
   hasSalt: boolean;
 }
 
+// --- module-level singleton --------------------------------------------------
+// `setContext` can't be used here (the client is created after an await, outside
+// component init), so the live AppState lives in module rune state instead.
+
+let current = $state<AppState | null>(null);
+
+export function setCurrentAppState(state: AppState | null): void {
+  current = state;
+}
+
+/** The connected AppState. Throws if called before <App/> has connected. */
+export function useAppState(): AppState {
+  if (!current) {
+    throw new Error("AppState not initialised — render inside <App/>");
+  }
+  return current;
+}
+
 /** Coalesce a burst of signals into one refresh. */
 class Debounced {
   private timer: ReturnType<typeof setTimeout> | null = null;

@@ -1,11 +1,11 @@
 <script lang="ts">
   import type { ActionHash } from "@holochain/client";
-  import { getAppStateContext } from "$lib/context";
+  import { useAppState } from "$lib/appState.svelte";
   import { unb64 } from "$lib/format";
 
   let { nft, onclose }: { nft: ActionHash; onclose: () => void } = $props();
 
-  const app = getAppStateContext();
+  const app = useAppState();
 
   let dlg = $state<HTMLDialogElement>();
   let recipient = $state("");
