@@ -1,89 +1,113 @@
-# Live walkthrough — mint → reveal → transfer → accept
+# Demoing the app
 
-## Start it
+## 1. One-time setup
 
-From a **normal terminal** on the desktop (not `nix develop` — the script pulls the
-Holochain binaries out of the nix store itself):
+Electron's sandbox helper needs to be setuid-root (Ubuntu blocks the unprivileged
+sandbox, and disabling it breaks hc-spin's conductor injection):
+
+```bash
+sudo chown root:root ~/hNFT/node_modules/electron/dist/chrome-sandbox
+sudo chmod 4755      ~/hNFT/node_modules/electron/dist/chrome-sandbox
+```
+
+Redo this only if you reinstall `node_modules/electron`. `scripts/live.sh` checks
+it and prints these commands if it's not set.
+
+## 2. Start
+
+From a **normal terminal** (not `nix develop` — the script pulls the Holochain
+binaries out of the nix store itself):
 
 ```bash
 cd ~/hNFT
-npm start          # == bash scripts/live.sh
+npm start                 # == bash scripts/live.sh
+#   AGENTS=3 npm start     # 3 windows instead of 2
 ```
 
-What happens: builds the hApp if needed → starts the Vite dev server on `:1420` →
-waits for it → `hc-spin -n 2` opens **two Electron windows**, agent **A** and
-agent **B**, both loading the UI, wired to one fresh 2-agent conductor.
+Builds the hApp if needed → starts Vite on `:1420` → `hc-spin` opens **N Electron
+windows** (agent **A**, agent **B**, …), each loading the UI, all wired to one
+fresh conductor.
 
-Stop everything with `Ctrl-C` in that terminal.
+`Ctrl-C` in that terminal stops everything. ~1–1.5 GB RAM.
 
-RAM: ~1–1.5 GB while running (brief ~2 GB spike on the first zome call).
+## 3. Orient
 
----
+Each window's header:
 
-## The click-through
+- **left** — `Dev Collection` · `DEV` pill · `minter` pill (dev mode: everyone
+  can mint).
+- **centre** — `Collection` · `Discover` (disabled — needs a `get_all_nfts`
+  coordinator fn) · `Activity` (shows a count badge when offers are waiting).
+- **right** — `● N peers` · ☀/☾ theme toggle · your **identicon badge** (click to
+  copy your agent key) · **`+ Mint`**.
 
-Each window's header shows `Dev Collection (DEV)` and its own agent key
-(`uhCAk…`, top-right, monospace). **Copy B's key** — you paste it into A later.
+The point of the demo: you **never click Refresh**. Cards, the inbox, the detail
+view, and the activity log all update themselves from Holochain signals.
 
-The whole point is that you **never click Refresh**. Cards, the inbox, and the
-detail view update themselves from Holochain signals.
+## 4. Mint → reveal → transfer → accept
 
-### 1. Mint — in window A
+### Mint — window A
 
-1. **Mint** tab.
-2. Image URI: `ipfs://demo` (any string works).
-3. Attribute row: `background` / `cobalt`. (`+ attribute` for more.)
-4. **Mint**. → "Minted `uhCkk…` — sealed."
-5. **Wallet** tab — a card appears on its own, tagged **sealed**, no "salt missing"
-   badge (the salt was written to this window's IndexedDB).
+1. **`+ Mint`** (header) → modal.
+2. **Image URI** — use something that renders after reveal:
+   `https://picsum.photos/seed/bloom/512`, or a `data:` URI, or `ipfs://demo`
+   (that one will show a placeholder — browsers can't load `ipfs://`).
+3. Attributes — the `name` row becomes the card title (e.g. `name` / `Cosmic
+   Bloom`). Add more rows with `+ attribute`.
+4. **Mint sealed NFT**. Toast: *"Minted — publishing to peers…"*.
+5. **Collection** — a card appears on its own, titled, tagged **sealed**, with
+   your identicon. No refresh: the local `EntryCreated` signal drove it.
 
-*Signal:* the card showed up because the local `EntryCreated` post-commit signal
-triggered a wallet reload.
+### Reveal — window A
 
-### 2. Reveal — in window A
+1. Click the card → detail dialog (`minter: you`, `owner: you`).
+2. **Reveal metadata** (uses the salt saved in this window's IndexedDB at mint).
+3. Status flips to **revealed**; the image + attributes render. The card behind
+   updates too.
 
-1. Click the sealed card → detail dialog. `minter: you`, `owner: you`.
-2. **Reveal metadata**.
-3. Dialog flips to **revealed** — the image and `background: cobalt` render.
-4. Close it. The wallet card behind is already revealed too — no refresh.
+### Transfer — window A → B
 
-### 3. Transfer — window A → B
+1. In window B, click the **identicon badge** in the header to copy B's key.
+2. Window A: open the NFT → **Transfer** → paste B's key → **Send offer**. The
+   dialog auto-closes; toast *"Offer sent to …"*.
 
-1. Reopen the NFT's detail in A → **Transfer**.
-2. Paste **window B's agent key** into the recipient field.
-3. **Send offer** → "Offer sent…". Close the dialogs.
+### Accept — window B
 
-### 4. Accept — in window B
+1. A toast appears in B: **"New transfer offer — open it"**. Click it →
+   B jumps to the **Activity** tab and the offer row **flashes**.
+   (Or just click the Activity tab — the badge shows `1`.)
+2. The offer shows a thumbnail, `from <A>`, `hop #1`, and a live **countdown**
+   (from 5:00 — `transfer_window_secs` in `dna.yaml`).
+3. **Accept**.
 
-1. Look at B's **Inbox** (right sidebar) — the offer is already there. You did
-   not refresh B; it arrived via the `TransferOffered` remote signal.
-2. It shows `from <A short hash> · hop #1` and a live **countdown** ticking down
-   from 5:00 (`transfer_window_secs = 300` in `dna.yaml`).
-3. **Accept** (enabled while the countdown is > 0).
+### After the sale
 
-### 5. After the sale
+- **Window B → Collection** — the NFT is here (revealed image), no refresh.
+- **Window A** — the card leaves A's collection on its own (the wallet
+  self-heals: it reconciles against `current_owner` and drops the stale index
+  link). Open the NFT from anywhere and **Provenance** shows `#1  you → <B>`;
+  `owner` is B.
 
-- **Window B → Wallet**: the NFT is now here (revealed image), no refresh.
-- **Window A → open the NFT detail**:
-  - `owner:` is now B's short hash, not "you".
-  - **Provenance**: `#1  you → <B hash>`.
-  - A **"Remove stale wallet entry"** button appears — A still holds the derived
-    `AgentToNft` index link even though B owns the NFT. Click it; the card leaves
-    A's wallet. (This is the cache-vs-ledger split the `drop_stale_ownership_link`
-    edge test covers — provenance was already authoritative.)
+## 5. Worth showing
 
----
-
-## Things worth trying
-
-| Try | Expected |
+| Try | What it demonstrates |
 |---|---|
-| Transfer a **sealed** NFT to B, then B opens its detail | B sees "the reveal salt … is not stored on this device" — B never had the salt, so B can't reveal. Intentional. |
-| Let an offer's countdown hit 0:00 in B's inbox before accepting | **Accept** disables, tag flips to **expired**. |
-| B transfers the NFT onward to A (or a 3rd `-n 3` window) | Provenance grows to `#2`, `current_owner` follows the chain. |
-| Reload an Electron window (Ctrl-R) | State rebuilds from the DHT + this browser's IndexedDB salts. |
+| Transfer a **sealed** NFT (skip reveal), then **A** reveals it from the **"Awaiting your reveal"** shelf at the top of Collection | The minter can still reveal after transferring on — the zome gates reveal on *being the minter*, not ownership. B (the new owner) can't reveal — no salt, not the minter. |
+| Let an offer's countdown hit 0:00 in B before accepting | **Accept** disappears (not just disabled); an `expired` pill + **Hide** replace it, and the row drops into the collapsible **Resolved & hidden** section. After the window, A can also **cancel** it. |
+| B transfers onward to A (or a 3rd window with `AGENTS=3`) | Provenance grows to `#2`; `current_owner` follows the chain; a past owner can't re-offer. |
+| Toggle ☀/☾ | Full light theme; the choice persists (localStorage). |
+| Hover a card → **⊗**, or detail → **Hide from collection** | Per-device hide; hidden cards live in the collapsible **Hidden · N** section with an unhide control. Never touches on-chain state. |
+| **Hide** an offer, then expand **Resolved & hidden** → **Unhide** | Same reversible per-device pattern for offers; accepted/expired/hidden are visually distinct. |
+| Watch the header `● N peers` | Passive DHT-sync indicator (polled), instead of a refresh button. |
+| Reload a window (`Ctrl-R`) | State rebuilds from the DHT + that window's IndexedDB salts. Connection has a 15s timeout + **Retry** button if the conductor is slow. |
 
-## If a window shows "Could not connect"
+## Troubleshooting
 
-The Vite server wasn't up when hc-spin loaded it. `Ctrl-R` in that window. The
-`wait-on` guard in `live.sh` normally prevents this.
+- **"Could not connect"** — Vite wasn't up when hc-spin loaded it; `Ctrl-R` the
+  window (or click **Retry**).
+- **`kitsune2-bootstrap-srv ENOENT` / missing binary** — `live.sh` didn't get the
+  full holonix PATH; re-run `npm start` from a fresh terminal.
+- **Window won't close / frozen modal dialog** — from another terminal:
+  `pkill -9 -f 'hc-spin|electron/dist/electron|vite'`.
+- **`WARNING: … globally installed electron … v42.x`** — harmless; it uses the
+  bundled v42.
