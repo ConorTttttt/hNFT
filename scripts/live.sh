@@ -32,15 +32,16 @@ if [ ! -f "$HAPP" ]; then
   nix develop --accept-flake-config --command npm run build:happ
 fi
 
-echo "==> Resolving holonix binaries…"
-HC_BIN_DIRS="$(
-  nix develop --accept-flake-config --command bash -c \
-    'echo "$(dirname "$(command -v holochain)"):$(dirname "$(command -v lair-keystore)"):$(dirname "$(command -v hc)")"'
-)"
-export PATH="$HC_BIN_DIRS:$PATH"
+echo "==> Resolving the holonix toolchain PATH…"
+# Prepend the entire holonix PATH so hc-spin finds every binary it may spawn:
+# holochain, lair-keystore, hc, and kitsune2-bootstrap-srv (the local
+# bootstrap/signal server it starts for a multi-agent network).
+HOLONIX_PATH="$(nix develop --accept-flake-config --command bash -c 'printf %s "$PATH"')"
+export PATH="$HOLONIX_PATH:$PATH"
 HOLOCHAIN_BIN="$(command -v holochain)"
-echo "    holochain     : $HOLOCHAIN_BIN"
-echo "    lair-keystore : $(command -v lair-keystore)"
+for b in holochain lair-keystore hc kitsune2-bootstrap-srv; do
+  printf '    %-22s %s\n' "$b" "$(command -v "$b" || echo 'NOT FOUND')"
+done
 
 # Free the UI port if a previous run left something on it.
 if command -v fuser >/dev/null 2>&1; then
