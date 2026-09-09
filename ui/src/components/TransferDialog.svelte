@@ -24,9 +24,9 @@
     try {
       const to = unb64(recipient.trim());
       await app.initiateTransfer(nft, to);
-      result =
-        "Offer sent. It stays open for the collection's transfer window; the buyer accepts from their inbox.";
+      result = "Offer sent — closing…";
       recipient = "";
+      setTimeout(() => dlg?.close(), 1200);
     } catch (e) {
       err = String(e);
     } finally {

@@ -17,7 +17,7 @@ import {
   type RemoteSignal,
   type TransferCommitment,
 } from "@p2p-art-marketplace/client";
-import { eqHash, tsToMs } from "./format";
+import { b64, eqHash, tsToMs } from "./format";
 import {
   hasCommitment,
   loadCommitment,
@@ -164,18 +164,30 @@ export class AppState {
   async loadMyNfts(): Promise<void> {
     this.myNftsLoading = true;
     try {
+      // The AgentToNft index can carry duplicate / stale links (one per past
+      // ownership stint until dropped). Dedupe, then reconcile each against the
+      // authoritative provenance chain: keep only what we actually own, and
+      // quietly drop the leftover index links for the rest.
       const records = await this.nft.getNftsForAgent(this.me);
-      this.myNfts = await Promise.all(
-        records.map(async (r) => {
+      const byId = new Map<string, HcRecord>();
+      for (const r of records) byId.set(b64(recordActionHash(r)), r);
+
+      const resolved = await Promise.all(
+        [...byId.values()].map(async (r) => {
           const nft = recordActionHash(r);
-          return {
-            nft,
-            latest: r,
-            manifest: decodeNftManifest(r),
-            hasSalt: await hasCommitment(nft),
-          };
+          const [owner, hasSalt] = await Promise.all([
+            this.nft.currentOwner(nft).catch(() => this.me), // tolerate a lagging DHT
+            hasCommitment(nft),
+          ]);
+          const view: NftView = { nft, latest: r, manifest: decodeNftManifest(r), hasSalt };
+          return { view, owned: eqHash(owner, this.me) };
         }),
       );
+
+      this.myNfts = resolved.filter((x) => x.owned).map((x) => x.view);
+      for (const { view, owned } of resolved) {
+        if (!owned) void this.nft.dropStaleOwnershipLink(view.nft).catch(() => {});
+      }
       this.error = null;
     } catch (e) {
       this.error = String(e);

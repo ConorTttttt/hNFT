@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { AppState, setCurrentAppState } from "$lib/appState.svelte";
   import { connectHolochain } from "$lib/holochain";
   import { b64 } from "$lib/format";
@@ -12,31 +13,42 @@
   let app = $state<AppState | null>(null);
   let tab = $state<"wallet" | "mint">("wallet");
 
-  $effect(() => {
-    let s: AppState | null = null;
-    let cancelled = false;
-    (async () => {
-      try {
-        const client = await connectHolochain();
-        s = new AppState(client, client.myPubKey);
-        if (cancelled) {
-          s.dispose();
-          return;
-        }
-        setCurrentAppState(s);
-        app = s;
-        await s.init();
-        if (!cancelled) phase = "ready";
-      } catch (e) {
-        if (!cancelled) {
-          errMsg = String(e);
-          phase = "error";
-        }
-      }
-    })();
+  function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    return Promise.race([
+      p,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
+      ),
+    ]);
+  }
+
+  async function connect() {
+    phase = "connecting";
+    errMsg = "";
+    app?.dispose();
+    app = null;
+    setCurrentAppState(null);
+    try {
+      const client = await withTimeout(
+        connectHolochain(),
+        15000,
+        "conductor connection",
+      );
+      const s = new AppState(client, client.myPubKey);
+      setCurrentAppState(s);
+      app = s;
+      phase = "ready"; // show the UI as soon as the client is up …
+      s.init(); // … and let the stores populate with their own loading/error state
+    } catch (e) {
+      errMsg = String(e);
+      phase = "error";
+    }
+  }
+
+  onMount(() => {
+    connect();
     return () => {
-      cancelled = true;
-      s?.dispose();
+      app?.dispose();
       setCurrentAppState(null);
     };
   });
@@ -45,12 +57,14 @@
 {#if phase === "connecting"}
   <main style="padding: 2rem"><p class="muted">Connecting to the conductor…</p></main>
 {:else if phase === "error"}
-  <main style="padding: 2rem">
+  <main style="padding: 2rem" class="stack">
     <p class="error">Could not connect: {errMsg}</p>
     <p class="muted">
-      Run the UI via <span class="mono">hc-spin</span>, or set
-      <span class="mono">VITE_HC_ADMIN_PORT</span> for a packaged conductor.
+      Launch via <span class="mono">hc-spin</span> (it injects the conductor
+      URL + token), or set <span class="mono">VITE_HC_ADMIN_PORT</span> for a
+      packaged conductor.
     </p>
+    <div><button class="primary" onclick={connect}>Retry</button></div>
   </main>
 {:else if app}
   <header
