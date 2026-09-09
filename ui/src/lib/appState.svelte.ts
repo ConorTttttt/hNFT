@@ -17,7 +17,8 @@ import {
   type RemoteSignal,
   type TransferCommitment,
 } from "@p2p-art-marketplace/client";
-import { b64, eqHash, tsToMs } from "./format";
+import { b64, eqHash, shortHash, tsToMs } from "./format";
+import { toast } from "./toast.svelte";
 import {
   hasCommitment,
   loadCommitment,
@@ -145,9 +146,16 @@ export class AppState {
   private onSignal(s: RemoteSignal | LocalSignal): void {
     switch (s.type) {
       case "TransferOffered":
+        toast.info("New transfer offer in your inbox");
         this.refreshInbox.trigger();
         break;
       case "TransferAccepted":
+        toast.success("Your offer was accepted");
+        this.refreshWallet.trigger();
+        this.refreshDetail.trigger();
+        break;
+      case "NftRevealed":
+        toast.info("An NFT you own was revealed");
         this.refreshWallet.trigger();
         this.refreshDetail.trigger();
         break;
@@ -174,12 +182,19 @@ export class AppState {
 
       const resolved = await Promise.all(
         [...byId.values()].map(async (r) => {
-          const nft = recordActionHash(r);
-          const [owner, hasSalt] = await Promise.all([
+          const nft = recordActionHash(r); // identity = mint action hash
+          const [owner, latest, hasSalt] = await Promise.all([
             this.nft.currentOwner(nft).catch(() => this.me), // tolerate a lagging DHT
+            this.nft.getNft(nft).catch(() => null), // latest version (walks the reveal chain)
             hasCommitment(nft),
           ]);
-          const view: NftView = { nft, latest: r, manifest: decodeNftManifest(r), hasSalt };
+          const record = latest ?? r;
+          const view: NftView = {
+            nft,
+            latest: record,
+            manifest: decodeNftManifest(record),
+            hasSalt,
+          };
           return { view, owned: eqHash(owner, this.me) };
         }),
       );
@@ -263,54 +278,95 @@ export class AppState {
     }
   }
 
-  // --- actions (persist salt / refresh handled here; views just call these) ---
+  // --- actions ---------------------------------------------------------------
+  // Each toasts its own outcome and refreshes the affected stores, so views can
+  // just `await` and not thread error/loading state through every button.
 
   async mint(commitment: Commitment): Promise<ActionHash> {
-    const out = await this.nft.mintFromCommitment(commitment);
-    await saveCommitment(out.nft, commitment);
-    await this.loadMyNfts();
-    return out.nft;
+    try {
+      const out = await this.nft.mintFromCommitment(commitment);
+      await saveCommitment(out.nft, commitment);
+      await this.loadMyNfts();
+      toast.success(`Minted ${shortHash(out.nft)} — sealed`);
+      return out.nft;
+    } catch (e) {
+      toast.error(`Mint failed: ${errText(e)}`);
+      throw e;
+    }
   }
 
   async reveal(nft: ActionHash, previousActionHash: ActionHash): Promise<void> {
     const stored = await loadCommitment(nft);
     if (!stored) {
-      throw new Error(
-        "No reveal commitment for this NFT on this device — the salt is gone, it cannot be revealed here.",
+      toast.error(
+        "The reveal salt for this NFT isn't on this device — it can't be revealed here.",
       );
+      return;
     }
-    await this.nft.revealNft({
-      nft,
-      previousActionHash,
-      salt: Uint8Array.from(stored.salt),
-      attributes: stored.attributes,
-      imageUri: stored.imageUri,
-    });
-    await markRevealed(nft);
-    await Promise.all([this.loadMyNfts(), this.loadDetail(nft)]);
+    try {
+      await this.nft.revealNft({
+        nft,
+        previousActionHash,
+        salt: Uint8Array.from(stored.salt),
+        attributes: stored.attributes,
+        imageUri: stored.imageUri,
+      });
+      await markRevealed(nft);
+      await Promise.all([this.loadMyNfts(), this.loadDetail(nft)]);
+      toast.success("Metadata revealed");
+    } catch (e) {
+      toast.error(`Reveal failed: ${errText(e)}`);
+    }
   }
 
   async initiateTransfer(
     nft: ActionHash,
     toAgent: AgentPubKey,
   ): Promise<ActionHash> {
-    const commitment = await this.nft.initiateTransfer(nft, toAgent);
-    await this.loadMyNfts();
-    return commitment;
+    try {
+      const commitment = await this.nft.initiateTransfer(nft, toAgent);
+      await this.loadMyNfts();
+      toast.success(`Offer sent to ${shortHash(toAgent)}`);
+      return commitment;
+    } catch (e) {
+      toast.error(`Transfer offer failed: ${errText(e)}`);
+      throw e;
+    }
   }
 
   async acceptOffer(commitment: ActionHash): Promise<void> {
-    await this.nft.acceptTransfer(commitment);
-    await Promise.all([this.loadInbox(), this.loadMyNfts()]);
+    try {
+      await this.nft.acceptTransfer(commitment);
+      await Promise.all([this.loadInbox(), this.loadMyNfts()]);
+      toast.success("Offer accepted — NFT is yours");
+    } catch (e) {
+      toast.error(`Accept failed: ${errText(e)}`);
+    }
   }
 
   async cancelOffer(commitment: ActionHash): Promise<void> {
-    await this.nft.cancelTransfer(commitment);
-    await this.loadMyNfts();
+    try {
+      await this.nft.cancelTransfer(commitment);
+      await this.loadMyNfts();
+      toast.info("Offer cancelled");
+    } catch (e) {
+      toast.error(`Cancel failed: ${errText(e)}`);
+    }
   }
 
   async finalizeSale(nft: ActionHash): Promise<void> {
-    await this.nft.dropStaleOwnershipLink(nft);
-    await this.loadMyNfts();
+    try {
+      await this.nft.dropStaleOwnershipLink(nft);
+      await this.loadMyNfts();
+    } catch (e) {
+      toast.error(`Cleanup failed: ${errText(e)}`);
+    }
   }
+}
+
+/** Holochain guest errors arrive as `... Guest("message") ...` — pull the message. */
+function errText(e: unknown): string {
+  const s = String(e);
+  const m = s.match(/Guest\("(.+?)"\)/);
+  return m?.[1] ?? s;
 }

@@ -6,37 +6,33 @@
   let { view, onopen }: { view: NftView; onopen: (nft: ActionHash) => void } =
     $props();
 
-  const status = $derived(view.manifest.payload.status);
+  const payload = $derived(view.manifest.payload);
+  let imgOk = $state(true);
 </script>
 
-<button
-  class="panel stack"
-  style="text-align: left; align-items: stretch"
-  onclick={() => onopen(view.nft)}
->
-  <div class="row" style="justify-content: space-between">
-    <span class="tag {status}">{status}</span>
-    {#if status === "sealed" && !view.hasSalt}
-      <span class="tag error" title="reveal salt not on this device">
-        salt missing
-      </span>
-    {/if}
-  </div>
-
-  {#if view.manifest.payload.status === "revealed"}
+<button class="card" onclick={() => onopen(view.nft)}>
+  {#if payload.status === "revealed" && imgOk}
     <img
-      src={view.manifest.payload.image_uri}
+      class="thumb"
+      src={payload.image_uri}
       alt=""
-      style="width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; background: var(--panel-2)"
+      onerror={() => (imgOk = false)}
     />
   {:else}
-    <div
-      style="width: 100%; aspect-ratio: 1; border-radius: 8px; background: var(--panel-2); display: grid; place-items: center"
-      class="muted"
-    >
-      sealed
+    <div class="thumb placeholder">
+      {payload.status === "revealed" ? "no image" : "sealed"}
     </div>
   {/if}
 
-  <span class="mono muted">{shortHash(view.nft)}</span>
+  <div class="body">
+    <div class="row between">
+      <span class="pill {payload.status}">{payload.status}</span>
+      {#if payload.status === "sealed" && !view.hasSalt}
+        <span class="pill danger" title="reveal salt not on this device">
+          no salt
+        </span>
+      {/if}
+    </div>
+    <span class="mono faint small">{shortHash(view.nft)}</span>
+  </div>
 </button>

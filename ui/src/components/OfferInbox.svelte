@@ -12,15 +12,11 @@
   });
 
   let busyId = $state<string | null>(null);
-  let err = $state("");
 
   async function accept(commitment: Uint8Array) {
     busyId = b64(commitment);
-    err = "";
     try {
       await app.acceptOffer(commitment);
-    } catch (e) {
-      err = String(e);
     } finally {
       busyId = null;
     }
@@ -28,44 +24,56 @@
 </script>
 
 <div class="panel stack">
-  <div class="row" style="justify-content: space-between">
-    <h3 style="margin: 0">Inbox</h3>
-    <button class="ghost" onclick={() => app.loadInbox()} disabled={app.inboxLoading}>
+  <div class="row between">
+    <h3>Inbox {#if app.inbox.length}<span class="faint">· {app.inbox.length}</span>{/if}</h3>
+    <button
+      class="ghost tiny"
+      onclick={() => app.loadInbox()}
+      disabled={app.inboxLoading}
+    >
       {app.inboxLoading ? "…" : "Refresh"}
     </button>
   </div>
 
-  {#if app.inbox.length === 0}
-    <p class="muted">No inbound offers.</p>
+  {#if !app.inbox.length}
+    <div class="empty small">No inbound offers.</div>
   {:else}
-    <div class="stack">
+    <div class="stack tight">
       {#each app.inbox as offer (b64(offer.commitment))}
         {@const expired = now > offer.deadlineMs}
-        <div class="panel row" style="justify-content: space-between">
-          <div class="stack" style="gap: 0.2rem">
-            <span class="mono">NFT {shortHash(offer.nft)}</span>
-            <span class="muted mono">
+        <div class="offer">
+          <div class="stack tight grow" style="min-width: 0">
+            <span class="mono truncate">NFT {shortHash(offer.nft)}</span>
+            <span class="faint small mono truncate">
               from {shortHash(offer.from)} · hop #{offer.sequence}
             </span>
           </div>
-          <div class="row">
-            {#if expired}
-              <span class="tag error">expired</span>
-            {:else}
-              <Countdown deadlineMs={offer.deadlineMs} />
-            {/if}
-            <button
-              class="primary"
-              disabled={expired || busyId === b64(offer.commitment)}
-              onclick={() => accept(offer.commitment)}
-            >
-              Accept
-            </button>
-          </div>
+          {#if expired}
+            <span class="pill danger">expired</span>
+          {:else}
+            <Countdown deadlineMs={offer.deadlineMs} />
+          {/if}
+          <button
+            class="primary tiny"
+            disabled={expired || busyId === b64(offer.commitment)}
+            onclick={() => accept(offer.commitment)}
+          >
+            Accept
+          </button>
         </div>
       {/each}
     </div>
   {/if}
-
-  {#if err}<p class="error">{err}</p>{/if}
 </div>
+
+<style>
+  .offer {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+  }
+</style>

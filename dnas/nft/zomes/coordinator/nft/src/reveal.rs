@@ -1,3 +1,5 @@
+use crate::query::current_owner;
+use crate::RemoteSignal;
 use hdk::prelude::*;
 use nft_integrity::*;
 
@@ -57,11 +59,19 @@ pub fn reveal_nft(input: RevealNftInput) -> ExternResult<Record> {
 
     let updated_hash = update_entry(input.previous_action_hash, &revealed)?;
     create_link(
-        input.nft,
+        input.nft.clone(),
         updated_hash.clone(),
         LinkTypes::NftUpdates,
         (),
     )?;
+
+    // Nudge the current owner (if it isn't the minter) so their UI refreshes —
+    // local post_commit signals only reach this agent.
+    if let Ok(owner) = current_owner(input.nft.clone()) {
+        if owner != me {
+            let _ = send_remote_signal(RemoteSignal::NftRevealed { nft: input.nft }, vec![owner]);
+        }
+    }
 
     get(updated_hash, GetOptions::default())?.ok_or(wasm_error!(WasmErrorInner::Guest(
         "revealed NftManifest not found".into()

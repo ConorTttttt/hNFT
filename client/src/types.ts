@@ -68,7 +68,8 @@ export interface ProvenanceHop {
 /** Best-effort handshake nudge delivered via `recv_remote_signal`. */
 export type RemoteSignal =
   | { type: "TransferOffered"; commitment: ActionHash }
-  | { type: "TransferAccepted"; commitment: ActionHash };
+  | { type: "TransferAccepted"; commitment: ActionHash }
+  | { type: "NftRevealed"; nft: ActionHash };
 
 /** Local UI signal emitted from `post_commit` (loosely typed — shape follows the scaffolder's `Signal` enum). */
 export interface LocalSignal {

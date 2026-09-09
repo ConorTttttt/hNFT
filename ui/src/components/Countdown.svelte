@@ -13,6 +13,9 @@
   });
 
   const remaining = $derived(deadlineMs - now);
+  const cls = $derived(
+    remaining <= 0 ? "danger" : remaining < 60_000 ? "warn" : "",
+  );
 
   $effect(() => {
     if (remaining <= 0 && !fired) {
@@ -22,4 +25,4 @@
   });
 </script>
 
-<span class="mono" class:error={remaining <= 0}>{formatCountdown(remaining)}</span>
+<span class="pill {cls}">{formatCountdown(remaining)}</span>

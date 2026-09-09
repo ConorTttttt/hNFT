@@ -10,8 +10,6 @@
   let dlg = $state<HTMLDialogElement>();
   let recipient = $state("");
   let busy = $state(false);
-  let err = $state("");
-  let result = $state("");
 
   $effect(() => {
     dlg?.showModal();
@@ -19,16 +17,11 @@
 
   async function submit() {
     busy = true;
-    err = "";
-    result = "";
     try {
-      const to = unb64(recipient.trim());
-      await app.initiateTransfer(nft, to);
-      result = "Offer sent — closing…";
-      recipient = "";
-      setTimeout(() => dlg?.close(), 1200);
-    } catch (e) {
-      err = String(e);
+      await app.initiateTransfer(nft, unb64(recipient.trim()));
+      dlg?.close();
+    } catch {
+      // toast already shown by app.initiateTransfer
     } finally {
       busy = false;
     }
@@ -36,19 +29,21 @@
 </script>
 
 <dialog bind:this={dlg} onclose={onclose}>
-  <div class="stack">
-    <h3 style="margin: 0">Transfer</h3>
-    <label class="stack" style="gap: 0.25rem">
-      <span class="muted">Recipient AgentPubKey (base64)</span>
-      <input bind:value={recipient} placeholder="uhCAk…" class="mono" />
+  <div class="stack" style="min-width: min(400px, 88vw)">
+    <h3>Transfer</h3>
+    <label class="field">
+      <span>Recipient agent key (base64) — copy it from the other window's header</span>
+      <input class="mono" bind:value={recipient} placeholder="uhCAk…" />
     </label>
-    <div class="row">
-      <button class="primary" onclick={submit} disabled={busy || !recipient.trim()}>
+    <div class="row between">
+      <button class="ghost" onclick={() => dlg?.close()}>Cancel</button>
+      <button
+        class="primary"
+        onclick={submit}
+        disabled={busy || !recipient.trim()}
+      >
         {busy ? "Sending…" : "Send offer"}
       </button>
-      <button class="ghost" onclick={() => dlg?.close()}>Close</button>
     </div>
-    {#if err}<p class="error">{err}</p>{/if}
-    {#if result}<p class="ok">{result}</p>{/if}
   </div>
 </dialog>

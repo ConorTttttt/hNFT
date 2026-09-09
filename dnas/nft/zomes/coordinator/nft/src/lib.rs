@@ -34,6 +34,8 @@ pub enum RemoteSignal {
     /// Buyer -> seller: "I accepted". Seller may now drop their stale ownership
     /// index link.
     TransferAccepted { commitment: ActionHash },
+    /// Minter -> current owner: "I revealed this NFT". Owner's UI should refresh.
+    NftRevealed { nft: ActionHash },
 }
 
 #[hdk_extern]
