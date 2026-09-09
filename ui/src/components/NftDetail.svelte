@@ -1,7 +1,8 @@
 <script lang="ts">
   import { useAppState } from "$lib/appState.svelte";
-  import { b64, eqHash, shortHash } from "$lib/format";
+  import { b64, eqHash, nftTitle } from "$lib/format";
   import { toast } from "$lib/toast.svelte";
+  import AgentBadge from "./AgentBadge.svelte";
   import ProvenanceTimeline from "./ProvenanceTimeline.svelte";
   import RevealFlow from "./RevealFlow.svelte";
   import TransferDialog from "./TransferDialog.svelte";
@@ -57,7 +58,10 @@
       <button class="ghost" onclick={() => dlg?.close()}>Close</button>
     {:else}
       <div class="row between">
-        <span class="pill {d.manifest.payload.status}">{d.manifest.payload.status}</span>
+        <div class="stack tight" style="min-width: 0">
+          <h3 class="truncate">{nftTitle(d.manifest)}</h3>
+          <span class="pill {d.manifest.payload.status}">{d.manifest.payload.status}</span>
+        </div>
         <button class="ghost tiny" onclick={() => dlg?.close()}>Close ✕</button>
       </div>
 
@@ -93,9 +97,9 @@
           </button>
         </dd>
         <dt>minter</dt>
-        <dd class="mono">{iMinted ? "you" : shortHash(d.minter)}</dd>
+        <dd><AgentBadge agent={d.minter} size={18} /></dd>
         <dt>owner</dt>
-        <dd class="mono">{iOwn ? "you" : shortHash(d.owner)}</dd>
+        <dd><AgentBadge agent={d.owner} size={18} /></dd>
       </dl>
 
       {#if (d.manifest.payload.status === "sealed" && iMinted) || iOwn || staleWalletEntry}

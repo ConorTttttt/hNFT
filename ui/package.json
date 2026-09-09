@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@holochain/client": "0.21.0",
-    "@p2p-art-marketplace/client": "file:../client"
+    "@p2p-art-marketplace/client": "file:../client",
+    "@fontsource-variable/inter": "^5.1.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",

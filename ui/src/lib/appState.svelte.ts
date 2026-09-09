@@ -17,7 +17,7 @@ import {
   type RemoteSignal,
   type TransferCommitment,
 } from "@p2p-art-marketplace/client";
-import { b64, eqHash, shortHash, tsToMs } from "./format";
+import { b64, eqHash, nftTitle, shortHash, tsToMs } from "./format";
 import { toast } from "./toast.svelte";
 import {
   hasCommitment,
@@ -31,6 +31,8 @@ export interface NftView {
   nft: ActionHash;
   latest: HcRecord;
   manifest: DecodedNftManifest;
+  minter: AgentPubKey;
+  owner: AgentPubKey;
   /** Is the reveal commitment stored on this device? */
   hasSalt: boolean;
 }
@@ -42,6 +44,15 @@ export interface InboundOffer {
   sequence: number;
   openedAtMs: number;
   deadlineMs: number;
+  title: string;
+  imageUri: string | null;
+}
+
+export interface ActivityItem {
+  id: number;
+  at: number;
+  kind: "info" | "success";
+  text: string;
 }
 
 export interface NftDetail {
@@ -87,9 +98,20 @@ class Debounced {
   }
 }
 
+const DISMISSED_KEY = "p2p-art:dismissed-offers";
+
+function loadDismissed(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
 export class AppState {
   readonly nft: NftClient;
   readonly me: AgentPubKey;
+  private readonly client: AppWebsocket;
 
   collection = $state<CollectionInfo | null>(null);
   isMinter = $state(false);
@@ -104,9 +126,17 @@ export class AppState {
   detail = $state<NftDetail | null>(null);
   detailLoading = $state(false);
 
+  /** DHT peer connection count; `null` until the first poll. */
+  peers = $state<number | null>(null);
+  /** Session-only activity log, newest first. */
+  activity = $state<ActivityItem[]>([]);
+
   error = $state<string | null>(null);
 
+  private dismissed = loadDismissed();
+  private activitySeq = 0;
   private readonly unsub: () => void;
+  private peerTimer: ReturnType<typeof setInterval> | null = null;
   private readonly refreshWallet = new Debounced(() => void this.loadMyNfts());
   private readonly refreshInbox = new Debounced(() => void this.loadInbox());
   private readonly refreshDetail = new Debounced(() => {
@@ -114,6 +144,7 @@ export class AppState {
   });
 
   constructor(client: AppWebsocket, me: AgentPubKey, roleName?: string) {
+    this.client = client;
     this.nft = new NftClient({ client, roleName });
     this.me = me;
     this.unsub = this.nft.onSignal((s) => this.onSignal(s));
@@ -130,11 +161,38 @@ export class AppState {
     } catch (e) {
       this.error = String(e);
     }
+    void this.pollPeers();
+    this.peerTimer = setInterval(() => void this.pollPeers(), 6000);
     await Promise.all([this.loadMyNfts(), this.loadInbox()]);
   }
 
   dispose(): void {
     this.unsub();
+    if (this.peerTimer) clearInterval(this.peerTimer);
+  }
+
+  private async pollPeers(): Promise<void> {
+    try {
+      const stats = await this.client.dumpNetworkStats();
+      this.peers = stats.transport_stats.connections.length;
+    } catch {
+      this.peers = null;
+    }
+  }
+
+  private log(kind: ActivityItem["kind"], text: string): void {
+    this.activity.unshift({ id: ++this.activitySeq, at: Date.now(), kind, text });
+    if (this.activity.length > 60) this.activity.length = 60;
+  }
+
+  dismissOffer(commitment: ActionHash): void {
+    this.dismissed.add(b64(commitment));
+    try {
+      localStorage.setItem(DISMISSED_KEY, JSON.stringify([...this.dismissed]));
+    } catch {
+      /* private mode — dismissal is session-only */
+    }
+    this.inbox = this.inbox.filter((o) => !this.dismissed.has(b64(o.commitment)));
   }
 
   isMe(who: AgentPubKey): boolean {
@@ -146,16 +204,19 @@ export class AppState {
   private onSignal(s: RemoteSignal | LocalSignal): void {
     switch (s.type) {
       case "TransferOffered":
-        toast.info("New transfer offer in your inbox");
+        toast.info("New transfer offer");
+        this.log("info", "Received a transfer offer");
         this.refreshInbox.trigger();
         break;
       case "TransferAccepted":
         toast.success("Your offer was accepted");
+        this.log("success", "A transfer you offered was accepted");
         this.refreshWallet.trigger();
         this.refreshDetail.trigger();
         break;
       case "NftRevealed":
         toast.info("An NFT you own was revealed");
+        this.log("info", "An NFT you own was revealed by its minter");
         this.refreshWallet.trigger();
         this.refreshDetail.trigger();
         break;
@@ -193,6 +254,8 @@ export class AppState {
             nft,
             latest: record,
             manifest: decodeNftManifest(record),
+            minter: r.signed_action.hashed.content.header.author,
+            owner,
             hasSalt,
           };
           return { view, owned: eqHash(owner, this.me) };
@@ -216,19 +279,29 @@ export class AppState {
     try {
       const windowMs = (await this.ensureCollection()).transfer_window_secs * 1000;
       const records = await this.nft.inboundCommitments();
-      this.inbox = records.map((r) => {
-        const c = decodeEntry<TransferCommitment>(r);
-        const header = r.signed_action.hashed.content.header;
-        const openedAtMs = tsToMs(header.timestamp);
-        return {
-          commitment: recordActionHash(r),
-          nft: c.nft,
-          from: header.author,
-          sequence: c.sequence,
-          openedAtMs,
-          deadlineMs: openedAtMs + windowMs,
-        };
-      });
+      const offers = await Promise.all(
+        records
+          .filter((r) => !this.dismissed.has(b64(recordActionHash(r))))
+          .map(async (r) => {
+            const c = decodeEntry<TransferCommitment>(r);
+            const header = r.signed_action.hashed.content.header;
+            const openedAtMs = tsToMs(header.timestamp);
+            const nftRec = await this.nft.getNft(c.nft).catch(() => null);
+            const m = nftRec ? decodeNftManifest(nftRec) : null;
+            return {
+              commitment: recordActionHash(r),
+              nft: c.nft,
+              from: header.author,
+              sequence: c.sequence,
+              openedAtMs,
+              deadlineMs: openedAtMs + windowMs,
+              title: m ? nftTitle(m) : "NFT",
+              imageUri:
+                m?.payload.status === "revealed" ? m.payload.image_uri : null,
+            } satisfies InboundOffer;
+          }),
+      );
+      this.inbox = offers;
       this.error = null;
     } catch (e) {
       this.error = String(e);
@@ -286,8 +359,11 @@ export class AppState {
     try {
       const out = await this.nft.mintFromCommitment(commitment);
       await saveCommitment(out.nft, commitment);
+      // The zome call has returned, so the entry + links are on our source chain;
+      // DHT propagation to peers happens asynchronously from here.
+      toast.success("Minted — publishing to peers…");
+      this.log("success", `Minted ${shortHash(out.nft)} (sealed)`);
       await this.loadMyNfts();
-      toast.success(`Minted ${shortHash(out.nft)} — sealed`);
       return out.nft;
     } catch (e) {
       toast.error(`Mint failed: ${errText(e)}`);
@@ -314,6 +390,7 @@ export class AppState {
       await markRevealed(nft);
       await Promise.all([this.loadMyNfts(), this.loadDetail(nft)]);
       toast.success("Metadata revealed");
+      this.log("success", `Revealed ${shortHash(nft)}`);
     } catch (e) {
       toast.error(`Reveal failed: ${errText(e)}`);
     }
@@ -327,6 +404,7 @@ export class AppState {
       const commitment = await this.nft.initiateTransfer(nft, toAgent);
       await this.loadMyNfts();
       toast.success(`Offer sent to ${shortHash(toAgent)}`);
+      this.log("info", `Offered ${shortHash(nft)} to ${shortHash(toAgent)}`);
       return commitment;
     } catch (e) {
       toast.error(`Transfer offer failed: ${errText(e)}`);
@@ -339,6 +417,7 @@ export class AppState {
       await this.nft.acceptTransfer(commitment);
       await Promise.all([this.loadInbox(), this.loadMyNfts()]);
       toast.success("Offer accepted — NFT is yours");
+      this.log("success", "Accepted a transfer offer");
     } catch (e) {
       toast.error(`Accept failed: ${errText(e)}`);
     }

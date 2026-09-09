@@ -1,12 +1,8 @@
 <script lang="ts">
   import type { ProvenanceHop } from "@p2p-art-marketplace/client";
-  import { useAppState } from "$lib/appState.svelte";
-  import { shortHash } from "$lib/format";
+  import AgentBadge from "./AgentBadge.svelte";
 
   let { hops }: { hops: ProvenanceHop[] } = $props();
-
-  const app = useAppState();
-  const who = (k: Uint8Array) => (app.isMe(k) ? "you" : shortHash(k));
 </script>
 
 {#if hops.length === 0}
@@ -16,9 +12,9 @@
     {#each hops as hop (hop.sequence)}
       <li>
         <span class="pill">#{hop.sequence}</span>
-        <span class="mono">{who(hop.from_agent)}</span>
+        <AgentBadge agent={hop.from_agent} size={16} />
         <span class="faint">→</span>
-        <span class="mono">{who(hop.to_agent)}</span>
+        <AgentBadge agent={hop.to_agent} size={16} />
       </li>
     {/each}
   </ol>
@@ -32,13 +28,14 @@
     border-left: 2px solid var(--border);
     display: flex;
     flex-direction: column;
-    gap: 0.55rem;
+    gap: 0.5rem;
   }
   .timeline li {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
     position: relative;
+    flex-wrap: wrap;
   }
   .timeline li::before {
     content: "";

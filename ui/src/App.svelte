@@ -2,18 +2,19 @@
   import { onMount } from "svelte";
   import { AppState, setCurrentAppState } from "$lib/appState.svelte";
   import { connectHolochain } from "$lib/holochain";
-  import { b64 } from "$lib/format";
   import { toast } from "$lib/toast.svelte";
-  import MintForm from "./components/MintForm.svelte";
+  import ActivityFeed from "./components/ActivityFeed.svelte";
+  import AgentBadge from "./components/AgentBadge.svelte";
+  import MintDialog from "./components/MintDialog.svelte";
   import NftDetail from "./components/NftDetail.svelte";
-  import OfferInbox from "./components/OfferInbox.svelte";
   import Toaster from "./components/Toaster.svelte";
   import WalletGrid from "./components/WalletGrid.svelte";
 
   let phase = $state<"connecting" | "ready" | "error">("connecting");
   let errMsg = $state("");
   let app = $state<AppState | null>(null);
-  let tab = $state<"wallet" | "mint">("wallet");
+  let view = $state<"collection" | "activity">("collection");
+  let showMint = $state(false);
 
   function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
     return Promise.race([
@@ -31,11 +32,7 @@
     app = null;
     setCurrentAppState(null);
     try {
-      const client = await withTimeout(
-        connectHolochain(),
-        15000,
-        "conductor connection",
-      );
+      const client = await withTimeout(connectHolochain(), 15000, "conductor connection");
       const s = new AppState(client, client.myPubKey);
       setCurrentAppState(s);
       app = s;
@@ -54,15 +51,6 @@
       setCurrentAppState(null);
     };
   });
-
-  async function copyKey(key: Uint8Array) {
-    try {
-      await navigator.clipboard.writeText(b64(key));
-      toast.info("Agent key copied");
-    } catch {
-      toast.error("Clipboard unavailable");
-    }
-  }
 </script>
 
 <Toaster />
@@ -81,49 +69,50 @@
     <div><button class="primary" onclick={connect}>Retry</button></div>
   </main>
 {:else if app}
-  {@const me = app.me}
+  {@const a = app}
   <header>
     <div class="row" style="gap: 0.6rem">
       <span class="dot"></span>
-      <strong>{app.collection?.name ?? "Collection"}</strong>
-      {#if app.collection}
-        <span class="pill">{app.collection.symbol}</span>
-      {/if}
-      {#if app.isMinter}<span class="pill accent">minter</span>{/if}
+      <strong>{a.collection?.name ?? "P2P Art Hub"}</strong>
+      {#if a.collection}<span class="pill">{a.collection.symbol}</span>{/if}
+      {#if a.isMinter}<span class="pill cyan">minter</span>{/if}
     </div>
-    <button
-      class="chip"
-      title="click to copy your agent key"
-      onclick={() => copyKey(me)}
-    >
-      <span class="mono truncate" style="max-width: 220px">{b64(app.me)}</span>
-      <span class="faint">⧉</span>
-    </button>
+
+    <nav class="nav">
+      <button class:active={view === "collection"} onclick={() => (view = "collection")}>
+        Collection
+      </button>
+      <button disabled title="needs a get_all_nfts coordinator fn">Discover</button>
+      <button class:active={view === "activity"} onclick={() => (view = "activity")}>
+        Activity
+        {#if a.inbox.length}<span class="count">{a.inbox.length}</span>{/if}
+      </button>
+    </nav>
+
+    <div class="row" style="gap: 0.75rem">
+      <span class="peer" class:syncing={a.peers === null || a.peers === 0}>
+        <span class="dot"></span>
+        {#if a.peers === null}
+          syncing…
+        {:else}
+          {a.peers} peer{a.peers === 1 ? "" : "s"}
+        {/if}
+      </span>
+      <AgentBadge agent={a.me} size={22} />
+      <button class="primary" onclick={() => (showMint = true)}>+ Mint</button>
+    </div>
   </header>
 
   <main class="workspace">
-    <section class="stack">
-      <div class="row">
-        <button class:primary={tab === "wallet"} onclick={() => (tab = "wallet")}
-          >Wallet</button
-        >
-        <button class:primary={tab === "mint"} onclick={() => (tab = "mint")}
-          >Mint</button
-        >
-      </div>
-      {#if tab === "wallet"}
-        <WalletGrid />
-      {:else}
-        <MintForm />
-      {/if}
-    </section>
-
-    <aside><OfferInbox /></aside>
+    {#if view === "collection"}
+      <WalletGrid onmint={() => (showMint = true)} />
+    {:else}
+      <ActivityFeed />
+    {/if}
   </main>
 
-  {#if app.detailNft}
-    <NftDetail />
-  {/if}
+  {#if a.detailNft}<NftDetail />{/if}
+  {#if showMint}<MintDialog onclose={() => (showMint = false)} />{/if}
 {/if}
 
 <style>
@@ -132,22 +121,19 @@
     justify-content: space-between;
     align-items: center;
     gap: 1rem;
-    padding: 0.75rem 1.25rem;
+    padding: 0.7rem 1.25rem;
     border-bottom: 1px solid var(--border);
-    background: color-mix(in oklab, var(--bg-elev) 85%, transparent);
+    background: color-mix(in oklab, var(--bg-elev) 88%, transparent);
     position: sticky;
     top: 0;
-    backdrop-filter: blur(8px);
+    backdrop-filter: blur(10px);
     z-index: 10;
+    flex-wrap: wrap;
   }
   .workspace {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 340px;
-    gap: 1.25rem;
-    padding: 1.25rem;
-    align-items: start;
-    max-width: 1200px;
+    max-width: 1180px;
     margin: 0 auto;
+    padding: 1.5rem 1.25rem;
   }
   .center {
     min-height: 70vh;
@@ -155,10 +141,5 @@
     place-content: center;
     padding: 2rem;
     text-align: center;
-  }
-  @media (max-width: 820px) {
-    .workspace {
-      grid-template-columns: 1fr;
-    }
   }
 </style>

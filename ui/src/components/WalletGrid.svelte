@@ -3,20 +3,15 @@
   import { b64 } from "$lib/format";
   import NftCard from "./NftCard.svelte";
 
+  let { onmint }: { onmint: () => void } = $props();
+
   const app = useAppState();
 </script>
 
 <div class="stack">
-  <div class="row between">
-    <h3>My NFTs {#if app.myNfts.length}<span class="faint">· {app.myNfts.length}</span>{/if}</h3>
-    <button
-      class="ghost tiny"
-      onclick={() => app.loadMyNfts()}
-      disabled={app.myNftsLoading}
-    >
-      {app.myNftsLoading ? "Refreshing…" : "Refresh"}
-    </button>
-  </div>
+  <h3>
+    My Collection {#if app.myNfts.length}<span class="faint">· {app.myNfts.length}</span>{/if}
+  </h3>
 
   {#if app.myNfts.length}
     <div class="grid">
@@ -27,13 +22,21 @@
   {:else if app.myNftsLoading}
     <div class="grid">
       {#each Array(3) as _, i (i)}
-        <div class="skeleton" style="aspect-ratio: 0.85"></div>
+        <div class="skeleton" style="aspect-ratio: 0.8"></div>
       {/each}
     </div>
   {:else}
-    <div class="empty stack" style="gap: 0.4rem">
-      <strong>Nothing here yet</strong>
-      <span class="small">Mint an NFT, or wait for a transfer to land.</span>
+    <div class="empty-hero">
+      <strong>Your gallery is empty</strong>
+      <span class="muted small">
+        Mint an NFT of your own, or wait for a transfer to arrive.
+      </span>
+      <div class="actions">
+        <button class="primary" onclick={onmint}>Mint your first NFT</button>
+        <button class="secondary" disabled title="needs a get_all_nfts coordinator fn">
+          Explore peer network
+        </button>
+      </div>
     </div>
   {/if}
 </div>

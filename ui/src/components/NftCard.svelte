@@ -1,12 +1,14 @@
 <script lang="ts">
   import type { ActionHash } from "@holochain/client";
   import type { NftView } from "$lib/appState.svelte";
-  import { shortHash } from "$lib/format";
+  import { nftTitle } from "$lib/format";
+  import AgentBadge from "./AgentBadge.svelte";
 
   let { view, onopen }: { view: NftView; onopen: (nft: ActionHash) => void } =
     $props();
 
   const payload = $derived(view.manifest.payload);
+  const title = $derived(nftTitle(view.manifest));
   let imgOk = $state(true);
 </script>
 
@@ -26,13 +28,16 @@
 
   <div class="body">
     <div class="row between">
+      <strong class="truncate">{title}</strong>
       <span class="pill {payload.status}">{payload.status}</span>
+    </div>
+    <div class="row between">
+      <AgentBadge agent={view.minter} size={18} />
       {#if payload.status === "sealed" && !view.hasSalt}
         <span class="pill danger" title="reveal salt not on this device">
           no salt
         </span>
       {/if}
     </div>
-    <span class="mono faint small">{shortHash(view.nft)}</span>
   </div>
 </button>
