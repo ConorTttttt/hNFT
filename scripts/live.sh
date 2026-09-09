@@ -26,6 +26,11 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # the sandbox rather than chase setuid perms that reset on every npm install.
 export ELECTRON_DISABLE_SANDBOX=1
 
+# Go through XWayland: native Wayland + Electron's Vulkan path produces a
+# "not compatible with Vulkan" warning and, on some GPUs, a black window.
+# Override with ELECTRON_OZONE_PLATFORM_HINT=wayland if you prefer native.
+export ELECTRON_OZONE_PLATFORM_HINT="${ELECTRON_OZONE_PLATFORM_HINT:-x11}"
+
 HAPP="workdir/p2p_art_marketplace.happ"
 if [ ! -f "$HAPP" ]; then
   echo "==> Building the hApp (needs the nix toolchain)…"
