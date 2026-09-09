@@ -46,6 +46,10 @@ export interface InboundOffer {
   deadlineMs: number;
   title: string;
   imageUri: string | null;
+  /** `accepted` if a TransferReceipt for this commitment is in the provenance chain. */
+  status: "pending" | "accepted";
+  /** Dismissed on this device (localStorage). */
+  hidden: boolean;
 }
 
 export interface ActivityItem {
@@ -185,18 +189,43 @@ export class AppState {
     if (this.activity.length > 60) this.activity.length = 60;
   }
 
-  dismissOffer(commitment: ActionHash): void {
-    this.dismissed.add(b64(commitment));
+  private persistDismissed(): void {
     try {
       localStorage.setItem(DISMISSED_KEY, JSON.stringify([...this.dismissed]));
     } catch {
       /* private mode — dismissal is session-only */
     }
-    this.inbox = this.inbox.filter((o) => !this.dismissed.has(b64(o.commitment)));
+  }
+
+  private applyHidden(): void {
+    this.inbox = this.inbox.map((o) => ({
+      ...o,
+      hidden: this.dismissed.has(b64(o.commitment)),
+    }));
+  }
+
+  dismissOffer(commitment: ActionHash): void {
+    this.dismissed.add(b64(commitment));
+    this.persistDismissed();
+    this.applyHidden();
+  }
+
+  restoreOffer(commitment: ActionHash): void {
+    this.dismissed.delete(b64(commitment));
+    this.persistDismissed();
+    this.applyHidden();
   }
 
   isMe(who: AgentPubKey): boolean {
     return eqHash(who, this.me);
+  }
+
+  /** Offers that still need a decision (pending, not hidden, not past the window). */
+  get pendingOfferCount(): number {
+    const now = Date.now();
+    return this.inbox.filter(
+      (o) => o.status === "pending" && !o.hidden && now < o.deadlineMs,
+    ).length;
   }
 
   // --- signal wiring -----------------------------------------------------
@@ -280,28 +309,36 @@ export class AppState {
       const windowMs = (await this.ensureCollection()).transfer_window_secs * 1000;
       const records = await this.nft.inboundCommitments();
       const offers = await Promise.all(
-        records
-          .filter((r) => !this.dismissed.has(b64(recordActionHash(r))))
-          .map(async (r) => {
-            const c = decodeEntry<TransferCommitment>(r);
-            const header = r.signed_action.hashed.content.header;
-            const openedAtMs = tsToMs(header.timestamp);
-            const nftRec = await this.nft.getNft(c.nft).catch(() => null);
-            const m = nftRec ? decodeNftManifest(nftRec) : null;
-            return {
-              commitment: recordActionHash(r),
-              nft: c.nft,
-              from: header.author,
-              sequence: c.sequence,
-              openedAtMs,
-              deadlineMs: openedAtMs + windowMs,
-              title: m ? nftTitle(m) : "NFT",
-              imageUri:
-                m?.payload.status === "revealed" ? m.payload.image_uri : null,
-            } satisfies InboundOffer;
-          }),
+        records.map(async (r) => {
+          const c = decodeEntry<TransferCommitment>(r);
+          const header = r.signed_action.hashed.content.header;
+          const openedAtMs = tsToMs(header.timestamp);
+          const commitment = recordActionHash(r);
+          const [nftRec, hops] = await Promise.all([
+            this.nft.getNft(c.nft).catch(() => null),
+            this.nft.getProvenance(c.nft).catch(() => []),
+          ]);
+          const m = nftRec ? decodeNftManifest(nftRec) : null;
+          const accepted = hops.some((h) =>
+            eqHash(h.commitment_action, commitment),
+          );
+          return {
+            commitment,
+            nft: c.nft,
+            from: header.author,
+            sequence: c.sequence,
+            openedAtMs,
+            deadlineMs: openedAtMs + windowMs,
+            title: m ? nftTitle(m) : "NFT",
+            imageUri:
+              m?.payload.status === "revealed" ? m.payload.image_uri : null,
+            status: accepted ? "accepted" : "pending",
+            hidden: this.dismissed.has(b64(commitment)),
+          } satisfies InboundOffer;
+        }),
       );
-      this.inbox = offers;
+      // Newest first.
+      this.inbox = offers.sort((a, b) => b.openedAtMs - a.openedAtMs);
       this.error = null;
     } catch (e) {
       this.error = String(e);

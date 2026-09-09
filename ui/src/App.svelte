@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { AppState, setCurrentAppState } from "$lib/appState.svelte";
   import { connectHolochain } from "$lib/holochain";
-  import { toast } from "$lib/toast.svelte";
+  import { theme, toggleTheme } from "$lib/theme.svelte";
   import ActivityFeed from "./components/ActivityFeed.svelte";
   import AgentBadge from "./components/AgentBadge.svelte";
   import MintDialog from "./components/MintDialog.svelte";
@@ -85,11 +85,11 @@
       <button disabled title="needs a get_all_nfts coordinator fn">Discover</button>
       <button class:active={view === "activity"} onclick={() => (view = "activity")}>
         Activity
-        {#if a.inbox.length}<span class="count">{a.inbox.length}</span>{/if}
+        {#if a.pendingOfferCount}<span class="count">{a.pendingOfferCount}</span>{/if}
       </button>
     </nav>
 
-    <div class="row" style="gap: 0.75rem">
+    <div class="row" style="gap: 0.6rem">
       <span class="peer" class:syncing={a.peers === null || a.peers === 0}>
         <span class="dot"></span>
         {#if a.peers === null}
@@ -98,6 +98,14 @@
           {a.peers} peer{a.peers === 1 ? "" : "s"}
         {/if}
       </span>
+      <button
+        class="ghost tiny"
+        title="toggle light / dark"
+        onclick={toggleTheme}
+        aria-label="toggle theme"
+      >
+        {theme.value === "dark" ? "☀" : "☾"}
+      </button>
       <AgentBadge agent={a.me} size={22} />
       <button class="primary" onclick={() => (showMint = true)}>+ Mint</button>
     </div>
