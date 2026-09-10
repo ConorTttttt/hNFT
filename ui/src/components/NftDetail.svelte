@@ -1,6 +1,6 @@
 <script lang="ts">
   import { useAppState } from "$lib/appState.svelte";
-  import { b64, eqHash, nftTitle } from "$lib/format";
+  import { b64, eqHash, nftTitle, relativeFuture, tsToMs } from "$lib/format";
   import { toast } from "$lib/toast.svelte";
   import AgentBadge from "./AgentBadge.svelte";
   import ProvenanceTimeline from "./ProvenanceTimeline.svelte";
@@ -22,6 +22,40 @@
   const d = $derived(app.detail);
   const iOwn = $derived(!!d && app.isMe(d.owner));
   const iMinted = $derived(!!d && app.isMe(d.minter));
+  const ag = $derived(d?.agreement ?? null);
+  const sealed = $derived(d?.manifest.payload.status === "sealed");
+  const pastDefault = $derived(
+    !!ag && Date.now() >= tsToMs(ag.default_after_micros),
+  );
+  const canMarkDefault = $derived(
+    !!nft && !!ag && sealed && !iMinted && pastDefault && !ag.defaulted,
+  );
+
+  let markBusy = $state(false);
+  async function markDefault() {
+    if (!nft) return;
+    markBusy = true;
+    try {
+      await app.markDefault(nft);
+    } finally {
+      markBusy = false;
+    }
+  }
+
+  async function copySecret() {
+    if (!nft) return;
+    const blob = await app.revealSecretBlob(nft);
+    if (!blob) {
+      toast.error("No reveal secret is stored on this device for this NFT");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(blob);
+      toast.info("Reveal secret copied — hand it to your delegate");
+    } catch {
+      toast.error("Clipboard unavailable");
+    }
+  }
   const staleWalletEntry = $derived(
     !!nft && !iOwn && app.myNfts.some((v) => eqHash(v.nft, nft)),
   );
@@ -101,6 +135,54 @@
         <dt>owner</dt>
         <dd><AgentBadge agent={d.owner} size={18} /></dd>
       </dl>
+
+      {#if ag}
+        <div class="divider"></div>
+        <div class="stack tight">
+          <div class="row between">
+            <h4>Reveal agreement</h4>
+            {#if ag.defaulted}
+              <span class="pill danger">defaulted</span>
+            {:else if sealed && Date.now() >= tsToMs(ag.reveal_by_micros)}
+              <span class="pill warn">reveal overdue</span>
+            {/if}
+          </div>
+          <dl class="defs">
+            <dt>reveal by</dt>
+            <dd>
+              {new Date(tsToMs(ag.reveal_by_micros)).toLocaleString()}
+              <span class="faint small">({relativeFuture(tsToMs(ag.reveal_by_micros))})</span>
+            </dd>
+            <dt>default after</dt>
+            <dd>
+              {new Date(tsToMs(ag.default_after_micros)).toLocaleString()}
+              <span class="faint small">({relativeFuture(tsToMs(ag.default_after_micros))})</span>
+            </dd>
+            {#if ag.delegate}
+              <dt>delegate</dt>
+              <dd><AgentBadge agent={ag.delegate} size={18} /></dd>
+            {/if}
+          </dl>
+          {#if canMarkDefault}
+            <div class="row wrap" style="gap: 0.5rem; align-items: center">
+              <button class="ghost" onclick={markDefault} disabled={markBusy}>
+                {markBusy ? "…" : "Mark reveal defaulted"}
+              </button>
+              <span class="faint small">
+                The deadline has passed and it's still sealed.
+              </span>
+            </div>
+          {/if}
+          {#if iMinted && ag.delegate && sealed}
+            <div class="row wrap" style="gap: 0.5rem; align-items: center">
+              <button class="ghost tiny" onclick={copySecret}>
+                Copy reveal secret for delegate
+              </button>
+              <span class="faint small">Hand it over out of band.</span>
+            </div>
+          {/if}
+        </div>
+      {/if}
 
       {#if (d.manifest.payload.status === "sealed" && iMinted) || iOwn || staleWalletEntry}
         <div class="divider"></div>

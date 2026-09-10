@@ -29,6 +29,18 @@ export function relativeTime(ms: number): string {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
+/** "in 3d" / "in 5h" / "in 12m" / "any moment" / "overdue". */
+export function relativeFuture(ms: number): string {
+  const diff = ms - Date.now();
+  if (diff <= 0) return "overdue";
+  const mins = Math.round(diff / 60_000);
+  if (mins < 1) return "any moment";
+  if (mins < 60) return `in ${mins}m`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `in ${hrs}h`;
+  return `in ${Math.round(hrs / 24)}d`;
+}
+
 export function eqHash(a?: Uint8Array, b?: Uint8Array): boolean {
   if (!a || !b || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;

@@ -1,3 +1,4 @@
+use crate::agreement::{MintAgreement, RevealDefault};
 use crate::nft_manifest::{is_create_of, NftManifest};
 use crate::transfer::{load_commitment, load_receipt, TransferReceipt};
 use crate::UnitEntryTypes;
@@ -216,6 +217,76 @@ pub fn validate_delete_link_agent_to_nft(
     if action.author() != original_action.author() {
         return Ok(ValidateCallbackResult::Invalid(
             "only the link author may remove their ownership-index link".into(),
+        ));
+    }
+    Ok(ValidateCallbackResult::Valid)
+}
+
+// --- MintAgreement links -----------------------------------------------------
+
+/// NftManifest mint action -> MintAgreement action. Author is the minter (the
+/// MintAgreement's own validation already checks its author == the minter).
+pub fn validate_create_link_nft_to_agreement(
+    action: TypedAction<CreateLinkData>,
+) -> ExternResult<ValidateCallbackResult> {
+    let nft = base_action_hash(&action)?;
+    let target = target_action_hash(&action)?;
+    let rec = must_get_valid_record(target)?;
+    let agreement: MintAgreement = rec
+        .entry()
+        .to_app_option()
+        .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("{e:?}"))))?
+        .ok_or(wasm_error!(WasmErrorInner::Guest(
+            "NftToAgreement target is not a MintAgreement".into()
+        )))?;
+    if agreement.nft != nft {
+        return Ok(ValidateCallbackResult::Invalid(
+            "NftToAgreement base does not match the agreement's nft".into(),
+        ));
+    }
+    Ok(ValidateCallbackResult::Valid)
+}
+
+/// NftManifest mint action -> RevealDefault action.
+pub fn validate_create_link_nft_to_reveal_default(
+    action: TypedAction<CreateLinkData>,
+) -> ExternResult<ValidateCallbackResult> {
+    let nft = base_action_hash(&action)?;
+    let target = target_action_hash(&action)?;
+    let rec = must_get_valid_record(target)?;
+    let default: RevealDefault = rec
+        .entry()
+        .to_app_option()
+        .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("{e:?}"))))?
+        .ok_or(wasm_error!(WasmErrorInner::Guest(
+            "NftToRevealDefault target is not a RevealDefault".into()
+        )))?;
+    if default.nft != nft {
+        return Ok(ValidateCallbackResult::Invalid(
+            "NftToRevealDefault base does not match the default's nft".into(),
+        ));
+    }
+    Ok(ValidateCallbackResult::Valid)
+}
+
+/// delegate AgentPubKey -> MintAgreement action. Base must be the agreement's
+/// named delegate.
+pub fn validate_create_link_agent_to_delegated_reveal(
+    action: TypedAction<CreateLinkData>,
+) -> ExternResult<ValidateCallbackResult> {
+    let delegate = base_agent(&action)?;
+    let target = target_action_hash(&action)?;
+    let rec = must_get_valid_record(target)?;
+    let agreement: MintAgreement = rec
+        .entry()
+        .to_app_option()
+        .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("{e:?}"))))?
+        .ok_or(wasm_error!(WasmErrorInner::Guest(
+            "AgentToDelegatedReveal target is not a MintAgreement".into()
+        )))?;
+    if agreement.delegate.as_ref() != Some(&delegate) {
+        return Ok(ValidateCallbackResult::Invalid(
+            "AgentToDelegatedReveal base is not the agreement's delegate".into(),
         ));
     }
     Ok(ValidateCallbackResult::Valid)

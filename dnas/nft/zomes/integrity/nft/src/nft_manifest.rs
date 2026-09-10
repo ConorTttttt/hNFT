@@ -1,3 +1,4 @@
+use crate::agreement::MintAgreement;
 use crate::dna_properties::CollectionProperties;
 use crate::UnitEntryTypes;
 use hdi::prelude::*;
@@ -23,6 +24,12 @@ pub enum NftPayload {
         salt: [u8; 32],
         attributes: Vec<NftAttribute>,
         image_uri: String,
+        /// The `MintAgreement` this reveal was authorised under, if any. Present
+        /// when the NFT was minted with an agreement — lets `validate()` check a
+        /// delegate-authored reveal. NOT part of `reveal_preimage` (the
+        /// commitment binds only salt/attributes/image_uri).
+        #[serde(default)]
+        agreement: Option<ActionHash>,
     },
 }
 
@@ -132,19 +139,58 @@ pub fn validate_update_nft_manifest(
     original_action: TypedAction<EntryCreationData>,
     original_nft: NftManifest,
 ) -> ExternResult<ValidateCallbackResult> {
+    let mint_hash = action.data.original_action_address.clone();
+
     if action.author() != original_action.author() {
-        return Ok(ValidateCallbackResult::Invalid(
-            "only the minter may reveal".into(),
-        ));
+        // Not the minter — allowed only if a MintAgreement names this author as
+        // delegate and the minter's reveal_by has passed.
+        let NftPayload::Revealed {
+            agreement: Some(ag_hash),
+            ..
+        } = &nft.payload
+        else {
+            return Ok(ValidateCallbackResult::Invalid(
+                "only the minter may reveal".into(),
+            ));
+        };
+        let ag_rec = must_get_valid_record(ag_hash.clone())?;
+        let ag: MintAgreement = ag_rec
+            .entry()
+            .to_app_option()
+            .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("{e:?}"))))?
+            .ok_or(wasm_error!(WasmErrorInner::Guest(
+                "reveal references a non-MintAgreement".into()
+            )))?;
+        if ag.nft != mint_hash {
+            return Ok(ValidateCallbackResult::Invalid(
+                "the referenced agreement is for a different NFT".into(),
+            ));
+        }
+        if ag_rec.action().author() != original_action.author() {
+            return Ok(ValidateCallbackResult::Invalid(
+                "the agreement was not authored by the minter".into(),
+            ));
+        }
+        if ag.delegate.as_ref() != Some(action.author()) {
+            return Ok(ValidateCallbackResult::Invalid(
+                "reveal author is not the agreement's delegate".into(),
+            ));
+        }
+        if action.timestamp().as_micros() < ag.reveal_by.as_micros() {
+            return Ok(ValidateCallbackResult::Invalid(
+                "the delegate may reveal only after reveal_by".into(),
+            ));
+        }
     }
     // Branching a reveal off an already-revealed manifest.
     if !matches!(original_nft.payload, NftPayload::Sealed) {
         return Ok(ValidateCallbackResult::Invalid("NFT already revealed".into()));
     }
-    // Branching a second reveal directly off the sealed mint. The minter's own
-    // chain is strictly ordered, so a prior Update targeting this same mint action
-    // means the NFT is already revealed.
-    let mint_hash = action.data.original_action_address.clone();
+    // Branching a second reveal directly off the sealed mint. The author's own
+    // chain is strictly ordered, so a prior Update targeting this same mint
+    // action means they already revealed it. (With a delegate, minter and
+    // delegate could each reveal once on their own chains — harmless: both must
+    // hash to the same commitment, and `get_nft` returns the latest.)
     let prev = action
         .prev_action()
         .ok_or_else(|| wasm_error!(WasmErrorInner::Guest("reveal has no prev_action".into())))?
@@ -166,6 +212,7 @@ pub fn validate_update_nft_manifest(
         salt,
         ref attributes,
         ref image_uri,
+        ..
     } = nft.payload
     else {
         return Ok(ValidateCallbackResult::Invalid(

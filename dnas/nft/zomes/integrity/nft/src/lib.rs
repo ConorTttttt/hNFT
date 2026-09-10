@@ -1,8 +1,10 @@
+pub mod agreement;
 pub mod dna_properties;
 pub mod links;
 pub mod nft_manifest;
 pub mod transfer;
 
+pub use agreement::*;
 pub use dna_properties::*;
 pub use links::*;
 pub use nft_manifest::*;
@@ -19,6 +21,10 @@ pub enum EntryTypes {
     TransferCommitment(TransferCommitment),
     TransferReceipt(TransferReceipt),
     TransferCancellation(TransferCancellation),
+    MintAgreement(MintAgreement),
+    RevealDefault(RevealDefault),
+    #[entry_type(visibility = "private")]
+    RevealSecret(RevealSecret),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -35,6 +41,12 @@ pub enum LinkTypes {
     /// owner AgentPubKey -> NftManifest original action. DERIVED ownership index;
     /// LinkTag = authorizing TransferReceipt action hash (or the mint action, seq 0).
     AgentToNft,
+    /// NftManifest original action -> MintAgreement action. (0 or 1.)
+    NftToAgreement,
+    /// NftManifest original action -> RevealDefault action. (0 or 1.)
+    NftToRevealDefault,
+    /// delegate AgentPubKey -> MintAgreement action. Delegate discovery.
+    AgentToDelegatedReveal,
 }
 
 #[hdk_extern]
@@ -61,6 +73,9 @@ fn validate_create_entry(
         EntryTypes::TransferCommitment(e) => validate_create_transfer_commitment(action, e),
         EntryTypes::TransferReceipt(e) => validate_create_transfer_receipt(action, e),
         EntryTypes::TransferCancellation(e) => validate_create_transfer_cancellation(action, e),
+        EntryTypes::MintAgreement(e) => validate_create_mint_agreement(action, e),
+        EntryTypes::RevealDefault(e) => validate_create_reveal_default(action, e),
+        EntryTypes::RevealSecret(e) => validate_create_reveal_secret(action, e),
     }
 }
 
@@ -105,6 +120,11 @@ fn validate_create_link(
             validate_create_link_agent_to_inbound_commitment(action)
         }
         LinkTypes::AgentToNft => validate_create_link_agent_to_nft(action),
+        LinkTypes::NftToAgreement => validate_create_link_nft_to_agreement(action),
+        LinkTypes::NftToRevealDefault => validate_create_link_nft_to_reveal_default(action),
+        LinkTypes::AgentToDelegatedReveal => {
+            validate_create_link_agent_to_delegated_reveal(action)
+        }
     }
 }
 
@@ -121,6 +141,11 @@ fn validate_delete_link(
             validate_delete_link_agent_to_inbound_commitment(action, original_action)
         }
         LinkTypes::AgentToNft => validate_delete_link_agent_to_nft(action, original_action),
+        LinkTypes::NftToAgreement
+        | LinkTypes::NftToRevealDefault
+        | LinkTypes::AgentToDelegatedReveal => Ok(ValidateCallbackResult::Invalid(
+            "agreement links are permanent".into(),
+        )),
     }
 }
 

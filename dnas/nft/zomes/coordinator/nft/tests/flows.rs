@@ -47,6 +47,7 @@ async fn mint_and_reveal() {
                 salt,
                 attributes: attributes.clone(),
                 image_uri: image_uri.clone(),
+                force: false,
             },
         )
         .await;
@@ -73,6 +74,7 @@ async fn mint_and_reveal() {
                 salt: [9u8; 32], // wrong salt
                 attributes,
                 image_uri,
+                force: false,
             },
         )
         .await;
@@ -281,6 +283,7 @@ async fn reveal_is_minter_only_and_single_shot() {
         salt,
         attributes: attributes.clone(),
         image_uri: image_uri.clone(),
+        force: false,
     };
 
     // Non-minter cannot reveal.
@@ -301,6 +304,7 @@ async fn reveal_is_minter_only_and_single_shot() {
                 salt,
                 attributes,
                 image_uri,
+                force: false,
             },
         )
         .await;

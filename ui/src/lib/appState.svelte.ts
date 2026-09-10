@@ -9,10 +9,13 @@ import {
   decodeEntry,
   decodeNftManifest,
   recordActionHash,
+  type AgreementView,
   type CollectionInfo,
   type Commitment,
   type DecodedNftManifest,
+  type DelegatedRevealView,
   type LocalSignal,
+  type NftAttribute,
   type ProvenanceHop,
   type RemoteSignal,
   type TransferCommitment,
@@ -68,6 +71,10 @@ export interface DraftView {
   title: string;
   imageUri: string;
   ownedByOther: boolean;
+  /** Its `MintAgreement`, if minted under one. */
+  agreement: AgreementView | null;
+  /** A private `RevealSecret` is parked on this chain — the sweep will auto-reveal. */
+  autoReveal: boolean;
 }
 
 export interface NftDetail {
@@ -77,6 +84,8 @@ export interface NftDetail {
   owner: AgentPubKey;
   provenance: ProvenanceHop[];
   hasSalt: boolean;
+  /** The `MintAgreement` for this NFT, if minted under one. */
+  agreement: AgreementView | null;
 }
 
 // --- module-level singleton --------------------------------------------------
@@ -148,6 +157,8 @@ export class AppState {
   myNftsLoading = $state(false);
   /** NFTs this device minted that are still sealed — revealable regardless of ownership. */
   drafts = $state<DraftView[]>([]);
+  /** NFTs this agent is the reveal delegate for. */
+  delegatedReveals = $state<DelegatedRevealView[]>([]);
 
   inbox = $state<InboundOffer[]>([]);
   inboxLoading = $state(false);
@@ -172,6 +183,7 @@ export class AppState {
   private readonly refreshWallet = new Debounced(() => {
     void this.loadMyNfts();
     void this.loadDrafts();
+    void this.loadDelegatedReveals();
   });
   private readonly refreshInbox = new Debounced(() => void this.loadInbox());
   private readonly refreshDetail = new Debounced(() => {
@@ -198,7 +210,12 @@ export class AppState {
     }
     void this.pollPeers();
     this.peerTimer = setInterval(() => void this.pollPeers(), 6000);
-    await Promise.all([this.loadMyNfts(), this.loadInbox(), this.loadDrafts()]);
+    await Promise.all([
+      this.loadMyNfts(),
+      this.loadInbox(),
+      this.loadDrafts(),
+      this.loadDelegatedReveals(),
+    ]);
   }
 
   dispose(): void {
@@ -230,7 +247,11 @@ export class AppState {
             await markRevealed(nft); // revealed elsewhere — drop it from the shelf
             return null;
           }
-          const owner = await this.nft.currentOwner(nft).catch(() => this.me);
+          const [owner, agreement, secret] = await Promise.all([
+            this.nft.currentOwner(nft).catch(() => this.me),
+            this.nft.agreementFor(nft).catch(() => null),
+            this.nft.revealSecretFor(nft).catch(() => null),
+          ]);
           const name = c.attributes.find(
             (a) => a.trait_type.trim().toLowerCase() === "name",
           )?.value;
@@ -239,10 +260,22 @@ export class AppState {
             title: name?.trim() || "Sealed NFT",
             imageUri: c.imageUri,
             ownedByOther: !eqHash(owner, this.me),
+            agreement,
+            autoReveal: secret !== null,
           } satisfies DraftView;
         }),
       );
       this.drafts = views.filter((v): v is DraftView => v !== null);
+    } catch (e) {
+      this.error = String(e);
+    }
+  }
+
+  async loadDelegatedReveals(): Promise<void> {
+    try {
+      this.delegatedReveals = (await this.nft.myDelegatedReveals()).filter(
+        (d) => d.sealed,
+      );
     } catch (e) {
       this.error = String(e);
     }
@@ -342,6 +375,13 @@ export class AppState {
         this.log("info", "An NFT you own was revealed by its minter");
         this.refreshWallet.trigger();
         this.refreshDetail.trigger();
+        break;
+      case "DelegatedReveal":
+        toast.info("You're the reveal delegate for an NFT", () => {
+          this.view = "activity";
+        });
+        this.log("info", "Named as a reveal delegate");
+        void this.loadDelegatedReveals();
         break;
       default:
         // local post_commit Signals: EntryCreated / EntryUpdated / LinkCreated / …
@@ -460,11 +500,12 @@ export class AppState {
   async loadDetail(nft: ActionHash): Promise<void> {
     this.detailLoading = true;
     try {
-      const [rec, owner, provenance, salt] = await Promise.all([
+      const [rec, owner, provenance, salt, agreement] = await Promise.all([
         this.nft.getNft(nft),
         this.nft.currentOwner(nft),
         this.nft.getProvenance(nft),
         hasCommitment(nft),
+        this.nft.agreementFor(nft).catch(() => null),
       ]);
       this.detail = rec
         ? {
@@ -473,6 +514,7 @@ export class AppState {
             owner,
             provenance,
             hasSalt: salt,
+            agreement,
           }
         : null;
       this.error = null;
@@ -487,19 +529,92 @@ export class AppState {
   // Each toasts its own outcome and refreshes the affected stores, so views can
   // just `await` and not thread error/loading state through every button.
 
-  async mint(commitment: Commitment): Promise<ActionHash> {
+  async mint(
+    commitment: Commitment,
+    agreement?: {
+      revealBy: Date;
+      defaultAfter: Date;
+      delegate?: AgentPubKey;
+      /** Park the reveal secret on-chain so the conductor sweep can auto-reveal. */
+      autoReveal: boolean;
+    },
+  ): Promise<ActionHash> {
     try {
-      const out = await this.nft.mintFromCommitment(commitment);
+      const secret = {
+        salt: commitment.salt,
+        attributes: commitment.attributes as NftAttribute[],
+        imageUri: commitment.imageUri,
+      };
+      const out = agreement
+        ? await this.nft.mintWithAgreement({
+            metadataHash: commitment.metadataHash,
+            revealBy: agreement.revealBy,
+            defaultAfter: agreement.defaultAfter,
+            delegate: agreement.delegate,
+            secret: agreement.autoReveal ? secret : undefined,
+          })
+        : await this.nft.mintFromCommitment(commitment);
       await saveCommitment(out.nft, commitment);
       // The zome call has returned, so the entry + links are on our source chain;
       // DHT propagation to peers happens asynchronously from here.
       toast.success("Minted — publishing to peers…");
-      this.log("success", `Minted ${shortHash(out.nft)} (sealed)`);
+      this.log(
+        "success",
+        `Minted ${shortHash(out.nft)}${agreement ? " (with reveal agreement)" : " (sealed)"}`,
+      );
       await Promise.all([this.loadMyNfts(), this.loadDrafts()]);
       return out.nft;
     } catch (e) {
       toast.error(`Mint failed: ${errText(e)}`);
       throw e;
+    }
+  }
+
+  async markDefault(nft: ActionHash): Promise<void> {
+    try {
+      await this.nft.markRevealDefault(nft);
+      toast.success("Marked reveal as defaulted");
+      this.log("info", `Reveal defaulted for ${shortHash(nft)}`);
+      await Promise.all([this.loadDrafts(), this.loadDetail(nft)]);
+    } catch (e) {
+      toast.error(`Could not mark defaulted: ${errText(e)}`);
+    }
+  }
+
+  /**
+   * The reveal secret this device parked for `nft`, as a JSON blob the minter
+   * can hand to their delegate out of band (phase 1 keeps the handoff manual).
+   * `null` if no secret was stored here.
+   */
+  async revealSecretBlob(nft: ActionHash): Promise<string | null> {
+    const s = await this.nft.revealSecretFor(nft).catch(() => null);
+    if (!s) return null;
+    return JSON.stringify({
+      nft: b64(nft),
+      salt: Array.from(s.salt),
+      attributes: s.attributes,
+      image_uri: s.imageUri,
+    });
+  }
+
+  /** Reveal as the named delegate, using a secret handed over out of band. */
+  async revealAsDelegate(
+    nft: ActionHash,
+    secret: { salt: Uint8Array; attributes: NftAttribute[]; imageUri: string },
+  ): Promise<void> {
+    try {
+      await this.nft.revealNft({
+        nft,
+        previousActionHash: nft, // first reveal branches off the mint
+        salt: secret.salt,
+        attributes: secret.attributes,
+        imageUri: secret.imageUri,
+      });
+      toast.success("Revealed on the minter's behalf");
+      this.log("success", `Revealed ${shortHash(nft)} as delegate`);
+      await Promise.all([this.loadDelegatedReveals(), this.loadDetail(nft)]);
+    } catch (e) {
+      toast.error(`Reveal failed: ${errText(e)}`);
     }
   }
 

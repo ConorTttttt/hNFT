@@ -8,9 +8,12 @@ import { SignalType } from "@holochain/client";
 import { decode } from "@msgpack/msgpack";
 import type { Commitment } from "./commitment.js";
 import type {
+  AgreementView,
   CollectionInfo,
+  DelegatedRevealView,
   LocalSignal,
   MintNftOutput,
+  NftAttribute,
   NftManifest,
   ProvenanceHop,
   RemoteSignal,
@@ -74,11 +77,41 @@ export class NftClient {
     return this.mintNft(c.metadataHash);
   }
 
+  /**
+   * Mint sealed under a reveal agreement: a deadline (`revealBy`), a
+   * `defaultAfter` past which anyone may mark it defaulted, an optional
+   * `delegate` who may reveal after `revealBy`, and — when `secret` is given —
+   * the reveal preimage parked privately on-chain so the conductor's auto-reveal
+   * sweep can reveal it without this browser.
+   */
+  mintWithAgreement(args: {
+    metadataHash: Uint8Array;
+    revealBy: Date;
+    defaultAfter: Date;
+    delegate?: AgentPubKey;
+    secret?: { salt: Uint8Array; attributes: NftAttribute[]; imageUri: string };
+  }): Promise<MintNftOutput> {
+    return this.call("mint_with_agreement", {
+      metadata_hash: bytes32(args.metadataHash),
+      reveal_by_micros: args.revealBy.getTime() * 1000,
+      default_after_micros: args.defaultAfter.getTime() * 1000,
+      delegate: args.delegate ?? null,
+      secret: args.secret
+        ? {
+            salt: bytes32(args.secret.salt),
+            attributes: args.secret.attributes,
+            image_uri: args.secret.imageUri,
+          }
+        : null,
+    });
+  }
+
   // --- reveal -------------------------------------------------------------
 
   /**
    * Reveal the sealed metadata. `previousActionHash` is the head of this agent's
-   * chain for the NFT — the mint action for a first reveal.
+   * chain for the NFT — the mint action for a first reveal. `force` reveals even
+   * if a `RevealDefault` exists (a late reveal).
    */
   revealNft(args: {
     nft: ActionHash;
@@ -86,6 +119,7 @@ export class NftClient {
     salt: Uint8Array;
     attributes: { trait_type: string; value: string }[];
     imageUri: string;
+    force?: boolean;
   }): Promise<HcRecord> {
     return this.call("reveal_nft", {
       nft: args.nft,
@@ -93,6 +127,7 @@ export class NftClient {
       salt: bytes32(args.salt),
       attributes: args.attributes,
       image_uri: args.imageUri,
+      force: args.force ?? false,
     });
   }
 
@@ -164,6 +199,41 @@ export class NftClient {
   /** Chain of custody, ordered by `sequence` (1-based, contiguous). */
   getProvenance(nft: ActionHash): Promise<ProvenanceHop[]> {
     return this.call("get_provenance", nft);
+  }
+
+  // --- reveal agreements -----------------------------------------------
+
+  /** The `MintAgreement` for an NFT (deadline, delegate, default state), or `null`. */
+  agreementFor(nft: ActionHash): Promise<AgreementView | null> {
+    return this.call("agreement_for", nft);
+  }
+
+  /** Mark an agreement's reveal defaulted (valid only after `defaultAfter`). */
+  markRevealDefault(nft: ActionHash): Promise<HcRecord> {
+    return this.call("mark_reveal_default", nft);
+  }
+
+  /** NFTs the connected agent is the reveal delegate for. */
+  myDelegatedReveals(): Promise<DelegatedRevealView[]> {
+    return this.call("my_delegated_reveals", null);
+  }
+
+  /** The reveal secret this device parked at mint for `nft`, if any (minter only). */
+  async revealSecretFor(
+    nft: ActionHash,
+  ): Promise<{ salt: Uint8Array; attributes: NftAttribute[]; imageUri: string } | null> {
+    const raw = await this.call<{
+      salt: number[];
+      attributes: NftAttribute[];
+      image_uri: string;
+    } | null>("reveal_secret_for", nft);
+    return raw
+      ? {
+          salt: Uint8Array.from(raw.salt),
+          attributes: raw.attributes,
+          imageUri: raw.image_uri,
+        }
+      : null;
   }
 
   // --- signals ---------------------------------------------------------

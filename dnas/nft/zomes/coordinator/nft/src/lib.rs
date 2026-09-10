@@ -1,3 +1,4 @@
+pub mod agreement;
 pub mod mint;
 pub mod query;
 pub mod reveal;
@@ -8,6 +9,9 @@ use nft_integrity::*;
 
 /// Path anchor for global NFT discovery within a collection cell.
 pub const COLLECTION_PATH: &str = "collection.all";
+
+/// Auto-reveal sweep cadence (7-field crontab: sec min hour dom mon dow year).
+const AUTO_REVEAL_CRON: &str = "0 */5 * * * * *";
 
 // Called the first time a zome call is made to the cell containing this zome.
 #[hdk_extern]
@@ -20,7 +24,75 @@ pub fn init() -> ExternResult<InitCallbackResult> {
         access: CapAccess::Unrestricted,
         functions: GrantedFunctions::Listed(functions),
     })?;
+    // Best effort — also (re)started by mint_with_agreement. `init` is lazy.
+    let _ = schedule("auto_reveal_due");
     Ok(InitCallbackResult::Pass)
+}
+
+#[hdk_extern]
+pub fn start_auto_reveal(_: ()) -> ExternResult<()> {
+    schedule("auto_reveal_due")
+}
+
+/// Reveal this agent's own sealed NFTs whose `MintAgreement.reveal_by` has passed,
+/// using the private `RevealSecret` parked at mint. Runs as the chain author
+/// (scheduling.md rule 1); only fires while this conductor is up.
+#[hdk_extern(infallible)]
+fn auto_reveal_due(_previous: Option<Schedule>) -> Option<Schedule> {
+    let keep = Some(Schedule::Persisted(AUTO_REVEAL_CRON.to_string()));
+
+    let Ok(now) = sys_time().map(|t| t.as_micros()) else {
+        return keep;
+    };
+    let Ok(records) = query(ChainQueryFilter::new().include_entries(true)) else {
+        return keep;
+    };
+
+    for rec in records {
+        let Ok(Some(secret)) = rec.entry().to_app_option::<RevealSecret>() else {
+            continue;
+        };
+        let nft = secret.nft.clone();
+
+        let still_sealed = matches!(
+            crate::query::get_nft(nft.clone())
+                .ok()
+                .flatten()
+                .and_then(|r| r.entry().to_app_option::<NftManifest>().ok().flatten())
+                .map(|m| m.payload),
+            Some(NftPayload::Sealed)
+        );
+        if !still_sealed {
+            continue;
+        }
+
+        let Ok(Some(ag_hash)) = crate::reveal::agreement_hash_for(&nft) else {
+            continue;
+        };
+        let Ok(ag) = crate::reveal::load_agreement(&ag_hash) else {
+            continue;
+        };
+        // Defensive: only act inside the intended window (scheduling.md rule 4).
+        if now < ag.reveal_by.as_micros() {
+            continue;
+        }
+        if crate::reveal::is_defaulted(&nft).unwrap_or(true) {
+            continue;
+        }
+
+        // First reveal branches off the mint action (prev == nft).
+        let _ = crate::reveal::do_reveal(
+            nft.clone(),
+            nft.clone(),
+            crate::mint::RevealSecretInput {
+                salt: secret.salt,
+                attributes: secret.attributes,
+                image_uri: secret.image_uri,
+            },
+        );
+    }
+
+    keep
 }
 
 // --- Remote signals: best-effort handshake nudges (never load-bearing) --------
@@ -36,6 +108,11 @@ pub enum RemoteSignal {
     TransferAccepted { commitment: ActionHash },
     /// Minter -> current owner: "I revealed this NFT". Owner's UI should refresh.
     NftRevealed { nft: ActionHash },
+    /// Minter -> delegate at mint: "you may reveal this NFT after reveal_by".
+    DelegatedReveal {
+        nft: ActionHash,
+        agreement: ActionHash,
+    },
 }
 
 #[hdk_extern]

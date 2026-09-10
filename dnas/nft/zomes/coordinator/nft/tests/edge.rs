@@ -244,6 +244,7 @@ async fn reveal_cannot_be_repeated_by_branching_off_the_mint() {
         salt,
         attributes: attributes.clone(),
         image_uri: image_uri.clone(),
+        force: false,
     };
 
     let first: Result<Record, _> = c.call_fallible(&z, "reveal_nft", reveal()).await;

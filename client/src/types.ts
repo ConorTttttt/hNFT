@@ -30,6 +30,8 @@ export type NftPayload =
       salt: number[];
       attributes: NftAttribute[];
       image_uri: string;
+      /** The `MintAgreement` this reveal was authorised under, if any. */
+      agreement?: ActionHash | null;
     };
 
 export interface NftManifest {
@@ -49,12 +51,37 @@ export interface TransferReceipt {
   commitment: ActionHash;
 }
 
+// --- reveal agreements -------------------------------------------------------
+
+/** Flattened `MintAgreement` from `agreement_for`. Timestamps are epoch micros. */
+export interface AgreementView {
+  agreement: ActionHash;
+  reveal_by_micros: number;
+  default_after_micros: number;
+  delegate: AgentPubKey | null;
+  defaulted: boolean;
+  /** Is the connected agent the delegate? */
+  am_delegate: boolean;
+}
+
+/** From `my_delegated_reveals`. */
+export interface DelegatedRevealView {
+  nft: ActionHash;
+  agreement: ActionHash;
+  reveal_by_micros: number;
+  default_after_micros: number;
+  defaulted: boolean;
+  sealed: boolean;
+}
+
 // --- coordinator I/O ------------------------------------------------------------
 
 export interface MintNftOutput {
   /** The NFT's permanent identity (its mint Create action hash). */
   nft: ActionHash;
   record: HcRecord;
+  /** The `MintAgreement` action, when minted with one. */
+  agreement?: ActionHash | null;
 }
 
 export interface ProvenanceHop {
@@ -69,7 +96,8 @@ export interface ProvenanceHop {
 export type RemoteSignal =
   | { type: "TransferOffered"; commitment: ActionHash }
   | { type: "TransferAccepted"; commitment: ActionHash }
-  | { type: "NftRevealed"; nft: ActionHash };
+  | { type: "NftRevealed"; nft: ActionHash }
+  | { type: "DelegatedReveal"; nft: ActionHash; agreement: ActionHash };
 
 /** Local UI signal emitted from `post_commit` (loosely typed — shape follows the scaffolder's `Signal` enum). */
 export interface LocalSignal {
