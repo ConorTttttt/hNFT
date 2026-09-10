@@ -28,3 +28,6 @@
 # local test output
 *.log
 dist/
+
+# local reference checkouts (not part of the build)
+reference/
