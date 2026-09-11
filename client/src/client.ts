@@ -191,6 +191,15 @@ export class NftClient {
     return this.call("get_nfts_for_agent", { agent });
   }
 
+  /**
+   * Every NFT ever minted in this collection (mint records — the sealed
+   * version, not necessarily the latest reveal state). Discovery only, not
+   * authoritative for ownership; follow up with `getNft` per item for that.
+   */
+  getAllNfts(): Promise<HcRecord[]> {
+    return this.call("get_all_nfts", null);
+  }
+
   /** Authoritative owner from the provenance chain. */
   currentOwner(nft: ActionHash): Promise<AgentPubKey> {
     return this.call("current_owner", nft);

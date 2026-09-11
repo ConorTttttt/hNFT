@@ -253,3 +253,30 @@ async fn reveal_cannot_be_repeated_by_branching_off_the_mint() {
     let second: Result<Record, _> = c.call_fallible(&z, "reveal_nft", reveal()).await;
     assert!(second.is_err(), "a second reveal off the mint must be rejected");
 }
+
+/// `get_all_nfts` lists every mint in the collection, regardless of who minted
+/// or currently owns it, and is visible to an uninvolved third party.
+#[tokio::test(flavor = "multi_thread")]
+async fn get_all_nfts_lists_every_mint_regardless_of_owner() {
+    let (conductors, cells) = setup(3, None).await;
+    let (za, zb, zc) = (cells[0].zome(ZOME), cells[1].zome(ZOME), cells[2].zome(ZOME));
+    let (ca, cb) = (conductors.get(0).unwrap(), conductors.get(1).unwrap());
+
+    let a: MintNftOutput = ca
+        .call(&za, "mint_nft", MintNftInput { metadata_hash: metadata_hash(20) })
+        .await;
+    let b: MintNftOutput = cb
+        .call(&zb, "mint_nft", MintNftInput { metadata_hash: metadata_hash(21) })
+        .await;
+    await_consistency(&cells).await.unwrap();
+
+    // A third, uninvolved agent (didn't mint or own either NFT) sees both.
+    let all: Vec<Record> = conductors
+        .get(2)
+        .unwrap()
+        .call(&zc, "get_all_nfts", ())
+        .await;
+    let hashes: Vec<ActionHash> = all.iter().map(|r| r.action_address().clone()).collect();
+    assert!(hashes.contains(&a.nft), "third party sees agent A's mint");
+    assert!(hashes.contains(&b.nft), "third party sees agent B's mint");
+}

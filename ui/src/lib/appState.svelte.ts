@@ -149,12 +149,16 @@ export class AppState {
   isMinter = $state(false);
 
   /** Which top-level view is showing; owned here so signals can navigate. */
-  view = $state<"collection" | "activity">("collection");
+  view = $state<"collection" | "discover" | "activity">("collection");
   /** Commitment to flash in the offers list (set from a "new offer" toast). */
   highlightOffer = $state<ActionHash | null>(null);
 
   myNfts = $state<NftView[]>([]);
   myNftsLoading = $state(false);
+  /** Every NFT in the collection, for the Discover view. Loaded lazily. */
+  discover = $state<NftView[]>([]);
+  discoverLoading = $state(false);
+  private discoverLoaded = false;
   /** NFTs this device minted that are still sealed — revealable regardless of ownership. */
   drafts = $state<DraftView[]>([]);
   /** NFTs this agent is the reveal delegate for. */
@@ -186,6 +190,9 @@ export class AppState {
     void this.loadDelegatedReveals();
   });
   private readonly refreshInbox = new Debounced(() => void this.loadInbox());
+  private readonly refreshDiscover = new Debounced(() => {
+    if (this.discoverLoaded) void this.loadDiscover();
+  });
   private readonly refreshDetail = new Debounced(() => {
     if (this.detailNft) void this.loadDetail(this.detailNft);
   });
@@ -325,6 +332,10 @@ export class AppState {
       ...v,
       hidden: this.hiddenNfts.has(b64(v.nft)),
     }));
+    this.discover = this.discover.map((v) => ({
+      ...v,
+      hidden: this.hiddenNfts.has(b64(v.nft)),
+    }));
   }
 
   hideNft(nft: ActionHash): void {
@@ -369,12 +380,14 @@ export class AppState {
         this.log("success", "A transfer you offered was accepted");
         this.refreshWallet.trigger();
         this.refreshDetail.trigger();
+        this.refreshDiscover.trigger();
         break;
       case "NftRevealed":
         toast.info("An NFT you own was revealed");
         this.log("info", "An NFT you own was revealed by its minter");
         this.refreshWallet.trigger();
         this.refreshDetail.trigger();
+        this.refreshDiscover.trigger();
         break;
       case "DelegatedReveal":
         toast.info("You're the reveal delegate for an NFT", () => {
@@ -388,6 +401,7 @@ export class AppState {
         this.refreshWallet.trigger();
         this.refreshInbox.trigger();
         this.refreshDetail.trigger();
+        this.refreshDiscover.trigger();
     }
   }
 
@@ -435,6 +449,49 @@ export class AppState {
       this.error = String(e);
     } finally {
       this.myNftsLoading = false;
+    }
+  }
+
+  /** Switch to the Discover view, loading its contents the first time. */
+  async openDiscover(): Promise<void> {
+    this.view = "discover";
+    if (!this.discoverLoaded) await this.loadDiscover();
+  }
+
+  /** Every NFT ever minted in the collection — not just this agent's own. */
+  async loadDiscover(): Promise<void> {
+    this.discoverLoading = true;
+    try {
+      const records = await this.nft.getAllNfts();
+      const byId = new Map<string, HcRecord>();
+      for (const r of records) byId.set(b64(recordActionHash(r)), r);
+
+      this.discover = await Promise.all(
+        [...byId.values()].map(async (r) => {
+          const nft = recordActionHash(r);
+          const [owner, latest, hasSalt] = await Promise.all([
+            this.nft.currentOwner(nft).catch(() => r.signed_action.hashed.content.header.author),
+            this.nft.getNft(nft).catch(() => null),
+            hasCommitment(nft),
+          ]);
+          const record = latest ?? r;
+          return {
+            nft,
+            latest: record,
+            manifest: decodeNftManifest(record),
+            minter: r.signed_action.hashed.content.header.author,
+            owner,
+            hasSalt,
+            hidden: this.hiddenNfts.has(b64(nft)),
+          } satisfies NftView;
+        }),
+      );
+      this.discoverLoaded = true;
+      this.error = null;
+    } catch (e) {
+      this.error = String(e);
+    } finally {
+      this.discoverLoading = false;
     }
   }
 

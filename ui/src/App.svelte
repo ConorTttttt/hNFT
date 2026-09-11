@@ -5,6 +5,7 @@
   import { theme, toggleTheme } from "$lib/theme.svelte";
   import ActivityFeed from "./components/ActivityFeed.svelte";
   import AgentBadge from "./components/AgentBadge.svelte";
+  import DiscoverGrid from "./components/DiscoverGrid.svelte";
   import MintDialog from "./components/MintDialog.svelte";
   import NftDetail from "./components/NftDetail.svelte";
   import Toaster from "./components/Toaster.svelte";
@@ -81,7 +82,9 @@
       <button class:active={a.view === "collection"} onclick={() => (a.view = "collection")}>
         Collection
       </button>
-      <button disabled title="needs a get_all_nfts coordinator fn">Discover</button>
+      <button class:active={a.view === "discover"} onclick={() => a.openDiscover()}>
+        Discover
+      </button>
       <button class:active={a.view === "activity"} onclick={() => (a.view = "activity")}>
         Activity
         {#if a.pendingOfferCount}<span class="count">{a.pendingOfferCount}</span>{/if}
@@ -113,6 +116,8 @@
   <main class="workspace">
     {#if a.view === "collection"}
       <WalletGrid onmint={() => (showMint = true)} />
+    {:else if a.view === "discover"}
+      <DiscoverGrid />
     {:else}
       <ActivityFeed />
     {/if}

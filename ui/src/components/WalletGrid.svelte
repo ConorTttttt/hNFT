@@ -43,7 +43,7 @@
       </span>
       <div class="actions">
         <button class="primary" onclick={onmint}>Mint your first NFT</button>
-        <button class="secondary" disabled title="needs a get_all_nfts coordinator fn">
+        <button class="secondary" onclick={() => app.openDiscover()}>
           Explore peer network
         </button>
       </div>

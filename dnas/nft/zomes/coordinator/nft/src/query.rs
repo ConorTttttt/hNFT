@@ -38,6 +38,27 @@ pub fn get_nfts_for_agent(input: GetNftsForAgentInput) -> ExternResult<Vec<Recor
     Ok(records.into_iter().flatten().collect())
 }
 
+/// Every NFT ever minted in this collection, mint records (not the latest
+/// revealed version — callers that need that should follow up with
+/// [`get_nft`] per item, same as [`get_nfts_for_agent`]). Discovery only —
+/// not authoritative for ownership.
+#[hdk_extern]
+pub fn get_all_nfts(_: ()) -> ExternResult<Vec<Record>> {
+    let path = Path::from(crate::COLLECTION_PATH);
+    let links = get_links(
+        LinkQuery::try_new(path.path_entry_hash()?, LinkTypes::PathToNft)?,
+        GetStrategy::Network,
+    )?;
+
+    let get_inputs: Vec<GetInput> = links
+        .into_iter()
+        .filter_map(|l| l.target.into_action_hash())
+        .map(|h| GetInput::new(h.into(), GetOptions::default()))
+        .collect();
+    let records = HDK.with(|hdk| hdk.borrow().get(get_inputs))?;
+    Ok(records.into_iter().flatten().collect())
+}
+
 /// Latest version of the manifest (walks the `NftUpdates` reveal chain).
 #[hdk_extern]
 pub fn get_nft(nft: ActionHash) -> ExternResult<Option<Record>> {
