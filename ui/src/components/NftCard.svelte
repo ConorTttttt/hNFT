@@ -4,6 +4,7 @@
   import { nftTitle } from "$lib/format";
   import AgentBadge from "./AgentBadge.svelte";
   import LikeButton from "./LikeButton.svelte";
+  import ListingBadge from "./ListingBadge.svelte";
 
   let {
     view,
@@ -58,6 +59,7 @@
       <strong class="truncate">{title}</strong>
       <span class="pill {payload.status}">{payload.status}</span>
     </div>
+    <ListingBadge nft={view.nft} />
     <div class="row between">
       <AgentBadge agent={view.minter} size={18} />
       {#if payload.status === "sealed" && !view.hasSalt}

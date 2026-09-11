@@ -17,6 +17,7 @@ import {
   type Commitment,
   type DecodedNftManifest,
   type DelegatedRevealView,
+  type ListingView,
   type LocalSignal,
   type NftAttribute,
   type ProvenanceHop,
@@ -94,6 +95,15 @@ export interface CollectionSummary {
   collection: ActionHash;
   name: string;
   description: string;
+}
+
+/** One buyer's expressed interest in one of this agent's own listings. */
+export interface InterestRow {
+  listing: ActionHash;
+  nft: ActionHash;
+  price: number;
+  currency: string;
+  buyer: AgentPubKey;
 }
 
 export interface NftDetail {
@@ -187,6 +197,9 @@ export class AppState {
   /** b64 agent keys this agent follows. */
   myFollowing = $state<Set<string>>(new Set());
   myCollections = $state<CollectionSummary[]>([]);
+  myListings = $state<ListingView[]>([]);
+  /** Interest expressed in any of `myListings` — the seller's queue. */
+  interestInMyListings = $state<InterestRow[]>([]);
 
   inbox = $state<InboundOffer[]>([]);
   inboxLoading = $state(false);
@@ -213,6 +226,7 @@ export class AppState {
     void this.loadMyNfts();
     void this.loadDrafts();
     void this.loadDelegatedReveals();
+    void this.loadMyListings();
   });
   private readonly refreshInbox = new Debounced(() => void this.loadInbox());
   private readonly refreshDiscover = new Debounced(() => {
@@ -251,6 +265,7 @@ export class AppState {
       this.loadDelegatedReveals(),
       this.loadMyFollowing(),
       this.loadMyCollections(),
+      this.loadMyListings(),
     ]);
   }
 
@@ -334,6 +349,38 @@ export class AppState {
         collection: recordActionHash(r),
         ...decodeEntry<{ name: string; description: string }>(r),
       }));
+    } catch (e) {
+      this.error = String(e);
+    }
+  }
+
+  async loadMyListings(): Promise<void> {
+    try {
+      this.myListings = await this.nft.myListings();
+      await this.loadInterestQueue();
+    } catch (e) {
+      this.error = String(e);
+    }
+  }
+
+  private async loadInterestQueue(): Promise<void> {
+    try {
+      const rows = await Promise.all(
+        this.myListings.map(async (l) => {
+          const buyers = await this.nft.interestedBuyers(l.listing).catch(() => []);
+          return buyers.map(
+            (buyer) =>
+              ({
+                listing: l.listing,
+                nft: l.nft,
+                price: l.price,
+                currency: l.currency,
+                buyer,
+              }) satisfies InterestRow,
+          );
+        }),
+      );
+      this.interestInMyListings = rows.flat();
     } catch (e) {
       this.error = String(e);
     }
@@ -450,6 +497,13 @@ export class AppState {
         });
         this.log("info", "Named as a reveal delegate");
         void this.loadDelegatedReveals();
+        break;
+      case "ListingInterest":
+        toast.info("Someone's interested in one of your listings", () => {
+          this.view = "activity";
+        });
+        this.log("info", "New interest in a listing");
+        void this.loadInterestQueue();
         break;
       default:
         // local post_commit Signals: EntryCreated / EntryUpdated / LinkCreated / …
@@ -931,6 +985,56 @@ export class AppState {
       toast.info("Removed from collection");
     } catch (e) {
       toast.error(`Remove failed: ${errText(e)}`);
+    }
+  }
+
+  // --- listings ---------------------------------------------------------
+
+  async listItem(nft: ActionHash, price: number, currency: string): Promise<void> {
+    try {
+      await this.nft.createListing(nft, price, currency);
+      toast.success("Listed for sale");
+      this.log("success", `Listed ${shortHash(nft)} for ${price} ${currency}`);
+      await Promise.all([this.loadMyListings(), this.loadDetail(nft)]);
+    } catch (e) {
+      toast.error(`Listing failed: ${errText(e)}`);
+      throw e;
+    }
+  }
+
+  async updateListingPrice(
+    previousActionHash: ActionHash,
+    price: number,
+    currency: string,
+    nft?: ActionHash,
+  ): Promise<void> {
+    try {
+      await this.nft.updateListingPrice(previousActionHash, price, currency);
+      toast.success("Listing updated");
+      await Promise.all([this.loadMyListings(), nft ? this.loadDetail(nft) : Promise.resolve()]);
+    } catch (e) {
+      toast.error(`Update failed: ${errText(e)}`);
+      throw e;
+    }
+  }
+
+  async cancelListing(listing: ActionHash, nft?: ActionHash): Promise<void> {
+    try {
+      await this.nft.cancelListing(listing);
+      toast.info("Listing cancelled");
+      await Promise.all([this.loadMyListings(), nft ? this.loadDetail(nft) : Promise.resolve()]);
+    } catch (e) {
+      toast.error(`Cancel failed: ${errText(e)}`);
+    }
+  }
+
+  async expressInterest(listing: ActionHash): Promise<void> {
+    try {
+      await this.nft.expressInterest(listing);
+      toast.success("Interest sent to the seller");
+      this.log("info", `Expressed interest in ${shortHash(listing)}`);
+    } catch (e) {
+      toast.error(`Failed to express interest: ${errText(e)}`);
     }
   }
 }

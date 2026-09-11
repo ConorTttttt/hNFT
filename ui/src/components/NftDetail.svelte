@@ -6,6 +6,7 @@
   import CommentThread from "./CommentThread.svelte";
   import FollowButton from "./FollowButton.svelte";
   import LikeButton from "./LikeButton.svelte";
+  import ListingSection from "./ListingSection.svelte";
   import ProvenanceTimeline from "./ProvenanceTimeline.svelte";
   import RevealFlow from "./RevealFlow.svelte";
   import TransferDialog from "./TransferDialog.svelte";
@@ -168,6 +169,9 @@
           </button>
         </div>
       {/if}
+
+      <div class="divider"></div>
+      <ListingSection {nft} {iOwn} />
 
       {#if ag}
         <div class="divider"></div>

@@ -1,12 +1,14 @@
 pub mod agreement;
 pub mod dna_properties;
 pub mod links;
+pub mod listing;
 pub mod nft_manifest;
 pub mod transfer;
 
 pub use agreement::*;
 pub use dna_properties::*;
 pub use links::*;
+pub use listing::*;
 pub use nft_manifest::*;
 pub use transfer::*;
 
@@ -25,6 +27,7 @@ pub enum EntryTypes {
     RevealDefault(RevealDefault),
     #[entry_type(visibility = "private")]
     RevealSecret(RevealSecret),
+    Listing(Listing),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -47,6 +50,18 @@ pub enum LinkTypes {
     NftToRevealDefault,
     /// delegate AgentPubKey -> MintAgreement action. Delegate discovery.
     AgentToDelegatedReveal,
+    /// `Path("collection.listings")` -> Listing action hash. Global discovery.
+    PathToListing,
+    /// NftManifest original action -> Listing action hash. "Is this listed."
+    NftToListing,
+    /// lister AgentPubKey -> Listing action hash. "My listings".
+    AgentToListing,
+    /// Listing original Create action -> Update action. Resolves "latest".
+    ListingUpdates,
+    /// Listing action hash -> interested buyer AgentPubKey. Seller's queue.
+    ListingToInterested,
+    /// buyer AgentPubKey -> Listing action hash. "Listings I'm interested in".
+    AgentToInterest,
 }
 
 #[hdk_extern]
@@ -76,13 +91,15 @@ fn validate_create_entry(
         EntryTypes::MintAgreement(e) => validate_create_mint_agreement(action, e),
         EntryTypes::RevealDefault(e) => validate_create_reveal_default(action, e),
         EntryTypes::RevealSecret(e) => validate_create_reveal_secret(action, e),
+        EntryTypes::Listing(e) => validate_create_listing(action, e),
     }
 }
 
-/// The "new entry stored by an Update action" op. Only NftManifest may be updated.
+/// The "new entry stored by an Update action" op. `NftManifest` (reveal) and
+/// `Listing` (price edit) may be updated; everything else is immutable.
 fn validate_stored_update_entry(app_entry: &EntryTypes) -> ExternResult<ValidateCallbackResult> {
     match app_entry {
-        EntryTypes::NftManifest(_) => Ok(ValidateCallbackResult::Valid),
+        EntryTypes::NftManifest(_) | EntryTypes::Listing(_) => Ok(ValidateCallbackResult::Valid),
         _ => Ok(ValidateCallbackResult::Invalid(IMMUTABLE.into())),
     }
 }
@@ -91,21 +108,39 @@ fn validate_register_update(
     app_entry: EntryTypes,
     action: TypedAction<UpdateData>,
 ) -> ExternResult<ValidateCallbackResult> {
-    let EntryTypes::NftManifest(nft) = app_entry else {
-        return Ok(ValidateCallbackResult::Invalid(IMMUTABLE.into()));
-    };
     let original_record = must_get_valid_record(action.data.original_action_address.clone())?;
     let original_action =
         TypedAction::<EntryCreationData>::try_from_action(original_record.action().clone())?;
-    let original_nft = match NftManifest::try_from(original_record) {
-        Ok(e) => e,
-        Err(e) => {
-            return Ok(ValidateCallbackResult::Invalid(format!(
-                "expected NftManifest as update original: {e:?}"
-            )))
+    match app_entry {
+        EntryTypes::NftManifest(nft) => {
+            let original_nft = match NftManifest::try_from(original_record) {
+                Ok(e) => e,
+                Err(e) => {
+                    return Ok(ValidateCallbackResult::Invalid(format!(
+                        "expected NftManifest as update original: {e:?}"
+                    )))
+                }
+            };
+            validate_update_nft_manifest(action, nft, original_action, original_nft)
         }
-    };
-    validate_update_nft_manifest(action, nft, original_action, original_nft)
+        EntryTypes::Listing(listing) => validate_update_listing(action, listing, original_action),
+        _ => Ok(ValidateCallbackResult::Invalid(IMMUTABLE.into())),
+    }
+}
+
+/// `EntryTypes` doesn't implement `TryFrom<SerializedBytes>` itself — only the
+/// individual structs do (`#[hdk_entry_helper]`) — so a fetched record of
+/// unknown-which-variant type (the delete path only has the deleted action's
+/// hash) is decoded by trying the deletable variants in turn. `to_app_option`
+/// returns `Err` (not `Ok(None)`) on a shape mismatch, so each attempt's
+/// error is swallowed, not propagated — the next attempt is the fallback.
+fn decode_deletable_entry(record: &Record) -> ExternResult<EntryTypes> {
+    if let Ok(Some(listing)) = record.entry().to_app_option::<Listing>() {
+        return Ok(EntryTypes::Listing(listing));
+    }
+    Err(wasm_error!(WasmErrorInner::Guest(
+        "deleted record is not a deletable entry type in this zome".into()
+    )))
 }
 
 fn validate_create_link(
@@ -125,6 +160,13 @@ fn validate_create_link(
         LinkTypes::AgentToDelegatedReveal => {
             validate_create_link_agent_to_delegated_reveal(action)
         }
+        LinkTypes::PathToListing | LinkTypes::AgentToListing => {
+            validate_create_link_to_listing(action)
+        }
+        LinkTypes::NftToListing => validate_create_link_nft_to_listing(action),
+        LinkTypes::ListingUpdates => validate_create_link_listing_updates(action),
+        LinkTypes::AgentToInterest => validate_create_link_agent_to_interest(action),
+        LinkTypes::ListingToInterested => validate_create_link_listing_to_interested(action),
     }
 }
 
@@ -146,6 +188,12 @@ fn validate_delete_link(
         | LinkTypes::AgentToDelegatedReveal => Ok(ValidateCallbackResult::Invalid(
             "agreement links are permanent".into(),
         )),
+        LinkTypes::PathToListing
+        | LinkTypes::AgentToListing
+        | LinkTypes::NftToListing
+        | LinkTypes::ListingUpdates
+        | LinkTypes::AgentToInterest
+        | LinkTypes::ListingToInterested => validate_delete_link_permanent(action, original_action),
     }
 }
 
@@ -163,8 +211,17 @@ pub fn validate(op: Op) -> ExternResult<ValidateCallbackResult> {
             OpUpdate::Entry { app_entry, action } => validate_register_update(app_entry, action),
             _ => Ok(ValidateCallbackResult::Valid),
         },
-        FlatOp::Delete(OpDelete { .. }) => {
-            Ok(ValidateCallbackResult::Invalid(NOT_DELETABLE.into()))
+        FlatOp::Delete(OpDelete { action }) => {
+            let original_record =
+                must_get_valid_record(action.data.deletes_address.clone())?;
+            let original_action = TypedAction::<EntryCreationData>::try_from_action(
+                original_record.action().clone(),
+            )?;
+            match decode_deletable_entry(&original_record) {
+                Ok(EntryTypes::Listing(_)) => validate_delete_listing(action, original_action),
+                Ok(_) => Ok(ValidateCallbackResult::Invalid(NOT_DELETABLE.into())),
+                Err(_) => Ok(ValidateCallbackResult::Invalid(NOT_DELETABLE.into())),
+            }
         }
         FlatOp::Link(OpLink::CreateLink { link_type, action }) => {
             validate_create_link(link_type, action)
@@ -181,8 +238,16 @@ pub fn validate(op: Op) -> ExternResult<ValidateCallbackResult> {
             OpRecord::UpdateEntry {
                 app_entry, action, ..
             } => validate_register_update(app_entry, action),
-            OpRecord::DeleteEntry { .. } => {
-                Ok(ValidateCallbackResult::Invalid(NOT_DELETABLE.into()))
+            OpRecord::DeleteEntry { action, .. } => {
+                let original_record =
+                    must_get_valid_record(action.data.deletes_address.clone())?;
+                let original_action = TypedAction::<EntryCreationData>::try_from_action(
+                    original_record.action().clone(),
+                )?;
+                match decode_deletable_entry(&original_record) {
+                    Ok(EntryTypes::Listing(_)) => validate_delete_listing(action, original_action),
+                    _ => Ok(ValidateCallbackResult::Invalid(NOT_DELETABLE.into())),
+                }
             }
             OpRecord::CreateLink { link_type, action } => validate_create_link(link_type, action),
             OpRecord::DeleteLink { action } => {

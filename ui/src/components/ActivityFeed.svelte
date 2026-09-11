@@ -2,6 +2,7 @@
   import { useAppState } from "$lib/appState.svelte";
   import { relativeTime } from "$lib/format";
   import DelegateShelf from "./DelegateShelf.svelte";
+  import InterestShelf from "./InterestShelf.svelte";
   import OfferInbox from "./OfferInbox.svelte";
 
   const app = useAppState();
@@ -20,6 +21,7 @@
   </div>
 
   <DelegateShelf />
+  <InterestShelf />
 
   <div class="panel stack">
     <h3>Recent activity</h3>

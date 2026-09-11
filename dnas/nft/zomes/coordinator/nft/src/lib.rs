@@ -1,4 +1,5 @@
 pub mod agreement;
+pub mod listing;
 pub mod mint;
 pub mod query;
 pub mod reveal;
@@ -112,6 +113,13 @@ pub enum RemoteSignal {
     DelegatedReveal {
         nft: ActionHash,
         agreement: ActionHash,
+    },
+    /// Buyer -> seller: "I'm interested in your listing". Best effort; the
+    /// interest itself is already durable via `ListingToInterested`.
+    ListingInterest {
+        listing: ActionHash,
+        nft: ActionHash,
+        buyer: AgentPubKey,
     },
 }
 

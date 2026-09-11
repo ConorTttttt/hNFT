@@ -5,15 +5,34 @@
 
   const app = useAppState();
 
-  const visible = $derived(app.discover.filter((v) => !v.hidden));
+  let forSaleOnly = $state(false);
+  let listedHashes = $state<Set<string> | null>(null);
+
+  $effect(() => {
+    if (!forSaleOnly || listedHashes) return;
+    app.nft
+      .allListings()
+      .then((views) => (listedHashes = new Set(views.map((v) => b64(v.nft)))))
+      .catch(() => (listedHashes = new Set()));
+  });
+
+  const visible = $derived(
+    app.discover.filter(
+      (v) => !v.hidden && (!forSaleOnly || listedHashes?.has(b64(v.nft))),
+    ),
+  );
   const hidden = $derived(app.discover.filter((v) => v.hidden));
 </script>
 
 <div class="stack" style="gap: 1.25rem">
-  <div class="row between">
+  <div class="row between wrap">
     <h3>
       Discover {#if visible.length}<span class="faint">· {visible.length}</span>{/if}
     </h3>
+    <label class="row" style="gap: 0.4rem; align-items: center">
+      <input type="checkbox" style="width: auto" bind:checked={forSaleOnly} />
+      <span class="small">For sale only</span>
+    </label>
     <span class="faint small">Every NFT minted in this collection</span>
   </div>
 

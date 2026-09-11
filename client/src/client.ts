@@ -11,6 +11,7 @@ import type {
   AgreementView,
   CollectionInfo,
   DelegatedRevealView,
+  ListingView,
   LocalSignal,
   MintNftOutput,
   NftAttribute,
@@ -243,6 +244,65 @@ export class NftClient {
           imageUri: raw.image_uri,
         }
       : null;
+  }
+
+  // --- listings ----------------------------------------------------------
+
+  /** Post a public asking price for an NFT you currently own. */
+  createListing(nft: ActionHash, price: number, currency: string): Promise<HcRecord> {
+    return this.call("create_listing", { nft, price, currency });
+  }
+
+  /** Change the price on your own listing. `previousActionHash` is the head
+   * of your update chain for it — the create action for a first edit, or the
+   * previous update's action thereafter. */
+  updateListingPrice(
+    previousActionHash: ActionHash,
+    price: number,
+    currency: string,
+  ): Promise<HcRecord> {
+    return this.call("update_listing_price", {
+      previous_action_hash: previousActionHash,
+      price,
+      currency,
+    });
+  }
+
+  /** Cancel your own listing. */
+  cancelListing(listing: ActionHash): Promise<void> {
+    return this.call("cancel_listing", listing);
+  }
+
+  /** Latest version of a listing (follows price edits). `null` if unknown. */
+  getListing(listing: ActionHash): Promise<HcRecord | null> {
+    return this.call("get_listing", listing);
+  }
+
+  /** The active listing for an NFT, if any — already confirmed the lister
+   * still owns it. */
+  listingForNft(nft: ActionHash): Promise<ListingView | null> {
+    return this.call("listing_for_nft", nft);
+  }
+
+  /** Every active listing in the collection, any lister. */
+  allListings(): Promise<ListingView[]> {
+    return this.call("all_listings", null);
+  }
+
+  /** Listings the connected agent currently has posted. */
+  myListings(): Promise<ListingView[]> {
+    return this.call("my_listings", null);
+  }
+
+  /** Signal interest in a listing. Doesn't move the NFT — the seller
+   * completes a sale with `initiateTransfer` at whichever buyer they pick. */
+  expressInterest(listing: ActionHash): Promise<void> {
+    return this.call("express_interest", listing);
+  }
+
+  /** Seller-facing: who has expressed interest in a listing. */
+  interestedBuyers(listing: ActionHash): Promise<AgentPubKey[]> {
+    return this.call("interested_buyers", listing);
   }
 
   // --- signals ---------------------------------------------------------

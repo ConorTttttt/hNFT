@@ -74,6 +74,26 @@ export interface DelegatedRevealView {
   sealed: boolean;
 }
 
+// --- listings -----------------------------------------------------------
+
+/** The `Listing` entry as it decodes off the wire (`decodeEntry`). */
+export interface Listing {
+  nft: ActionHash;
+  price: number;
+  currency: string;
+}
+
+/** Flattened active listing from `listing_for_nft` / `all_listings` /
+ * `my_listings` — already resolved to latest price and confirmed the lister
+ * still owns the NFT. */
+export interface ListingView {
+  listing: ActionHash;
+  nft: ActionHash;
+  price: number;
+  currency: string;
+  seller: AgentPubKey;
+}
+
 // --- coordinator I/O ------------------------------------------------------------
 
 export interface MintNftOutput {
@@ -97,7 +117,8 @@ export type RemoteSignal =
   | { type: "TransferOffered"; commitment: ActionHash }
   | { type: "TransferAccepted"; commitment: ActionHash }
   | { type: "NftRevealed"; nft: ActionHash }
-  | { type: "DelegatedReveal"; nft: ActionHash; agreement: ActionHash };
+  | { type: "DelegatedReveal"; nft: ActionHash; agreement: ActionHash }
+  | { type: "ListingInterest"; listing: ActionHash; nft: ActionHash; buyer: AgentPubKey };
 
 /** Local UI signal emitted from `post_commit` (loosely typed — shape follows the scaffolder's `Signal` enum). */
 export interface LocalSignal {
