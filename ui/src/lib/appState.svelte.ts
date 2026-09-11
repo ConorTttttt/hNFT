@@ -1,16 +1,19 @@
 import type {
   ActionHash,
   AgentPubKey,
+  AnyDhtHash,
   AppWebsocket,
   Record as HcRecord,
 } from "@holochain/client";
 import {
   NftClient,
+  SocialClient,
   decodeEntry,
   decodeNftManifest,
   recordActionHash,
   type AgreementView,
   type CollectionInfo,
+  type CollectionItemView,
   type Commitment,
   type DecodedNftManifest,
   type DelegatedRevealView,
@@ -18,6 +21,7 @@ import {
   type NftAttribute,
   type ProvenanceHop,
   type RemoteSignal,
+  type SocialRemoteSignal,
   type TransferCommitment,
 } from "@p2p-art-marketplace/client";
 import { b64, eqHash, nftTitle, shortHash, tsToMs, unb64 } from "./format";
@@ -29,6 +33,15 @@ import {
   markRevealed,
   saveCommitment,
 } from "./saltStore";
+
+/**
+ * The `nft` role name this device's `AppState` is wired to. The DNA supports
+ * many clone cells (one per art collection — see `workdir/happ.yaml`), but
+ * this UI doesn't yet expose switching between them, so every like/comment/
+ * collection-item authored here names this role. It's the `target_role` a
+ * social entry/link needs to resolve its target back to the right `nft` cell.
+ */
+export const NFT_ROLE = "nft";
 
 export interface NftView {
   /** Stable id: the mint action hash. */
@@ -75,6 +88,12 @@ export interface DraftView {
   agreement: AgreementView | null;
   /** A private `RevealSecret` is parked on this chain — the sweep will auto-reveal. */
   autoReveal: boolean;
+}
+
+export interface CollectionSummary {
+  collection: ActionHash;
+  name: string;
+  description: string;
 }
 
 export interface NftDetail {
@@ -142,6 +161,7 @@ function persistStringSet(key: string, set: Set<string>): void {
 
 export class AppState {
   readonly nft: NftClient;
+  readonly social: SocialClient;
   readonly me: AgentPubKey;
   private readonly client: AppWebsocket;
 
@@ -149,7 +169,7 @@ export class AppState {
   isMinter = $state(false);
 
   /** Which top-level view is showing; owned here so signals can navigate. */
-  view = $state<"collection" | "discover" | "activity">("collection");
+  view = $state<"collection" | "discover" | "collections" | "activity">("collection");
   /** Commitment to flash in the offers list (set from a "new offer" toast). */
   highlightOffer = $state<ActionHash | null>(null);
 
@@ -163,6 +183,10 @@ export class AppState {
   drafts = $state<DraftView[]>([]);
   /** NFTs this agent is the reveal delegate for. */
   delegatedReveals = $state<DelegatedRevealView[]>([]);
+
+  /** b64 agent keys this agent follows. */
+  myFollowing = $state<Set<string>>(new Set());
+  myCollections = $state<CollectionSummary[]>([]);
 
   inbox = $state<InboundOffer[]>([]);
   inboxLoading = $state(false);
@@ -183,6 +207,7 @@ export class AppState {
   private activitySeq = 0;
   private highlightTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly unsub: () => void;
+  private readonly unsubSocial: () => void;
   private peerTimer: ReturnType<typeof setInterval> | null = null;
   private readonly refreshWallet = new Debounced(() => {
     void this.loadMyNfts();
@@ -200,8 +225,10 @@ export class AppState {
   constructor(client: AppWebsocket, me: AgentPubKey, roleName?: string) {
     this.client = client;
     this.nft = new NftClient({ client, roleName });
+    this.social = new SocialClient({ client }); // global cell — no roleName override
     this.me = me;
     this.unsub = this.nft.onSignal((s) => this.onSignal(s));
+    this.unsubSocial = this.social.onSignal((s) => this.onSocialSignal(s));
   }
 
   async init(): Promise<void> {
@@ -222,11 +249,14 @@ export class AppState {
       this.loadInbox(),
       this.loadDrafts(),
       this.loadDelegatedReveals(),
+      this.loadMyFollowing(),
+      this.loadMyCollections(),
     ]);
   }
 
   dispose(): void {
     this.unsub();
+    this.unsubSocial();
     if (this.peerTimer) clearInterval(this.peerTimer);
     if (this.highlightTimer) clearTimeout(this.highlightTimer);
   }
@@ -283,6 +313,27 @@ export class AppState {
       this.delegatedReveals = (await this.nft.myDelegatedReveals()).filter(
         (d) => d.sealed,
       );
+    } catch (e) {
+      this.error = String(e);
+    }
+  }
+
+  async loadMyFollowing(): Promise<void> {
+    try {
+      const following = await this.social.following(this.me);
+      this.myFollowing = new Set(following.map((a) => b64(a)));
+    } catch (e) {
+      this.error = String(e);
+    }
+  }
+
+  async loadMyCollections(): Promise<void> {
+    try {
+      const records = await this.social.myCollections();
+      this.myCollections = records.map((r) => ({
+        collection: recordActionHash(r),
+        ...decodeEntry<{ name: string; description: string }>(r),
+      }));
     } catch (e) {
       this.error = String(e);
     }
@@ -354,6 +405,10 @@ export class AppState {
     return eqHash(who, this.me);
   }
 
+  isFollowing(agent: AgentPubKey): boolean {
+    return this.myFollowing.has(b64(agent));
+  }
+
   /** Offers that still need a decision (pending, not hidden, not past the window). */
   get pendingOfferCount(): number {
     const now = Date.now();
@@ -402,6 +457,15 @@ export class AppState {
         this.refreshInbox.trigger();
         this.refreshDetail.trigger();
         this.refreshDiscover.trigger();
+    }
+  }
+
+  private onSocialSignal(s: SocialRemoteSignal): void {
+    switch (s.type) {
+      case "Followed":
+        toast.info("You have a new follower");
+        this.log("info", "Someone followed you");
+        break;
     }
   }
 
@@ -747,6 +811,126 @@ export class AppState {
       await this.loadMyNfts();
     } catch (e) {
       toast.error(`Cleanup failed: ${errText(e)}`);
+    }
+  }
+
+  // --- social: follow / like / comment / collections --------------------
+
+  async toggleFollow(agent: AgentPubKey): Promise<void> {
+    const key = b64(agent);
+    const wasFollowing = this.myFollowing.has(key);
+    try {
+      if (wasFollowing) {
+        await this.social.unfollow(agent);
+        this.myFollowing.delete(key);
+      } else {
+        await this.social.follow(agent);
+        this.myFollowing.add(key);
+      }
+      this.myFollowing = new Set(this.myFollowing); // new ref for reactivity
+      if (!wasFollowing) {
+        toast.success(`Following ${shortHash(agent)}`);
+        this.log("info", `Followed ${shortHash(agent)}`);
+      }
+    } catch (e) {
+      toast.error(`${wasFollowing ? "Unfollow" : "Follow"} failed: ${errText(e)}`);
+    }
+  }
+
+  /** No toast — likes are meant to feel instant, not noteworthy. */
+  async toggleLike(target: AnyDhtHash, targetRole: string, currentlyLiked: boolean) {
+    try {
+      if (currentlyLiked) {
+        await this.social.unlike(target);
+      } else {
+        await this.social.like({ target, targetRole });
+      }
+      return await this.social.likesFor(target);
+    } catch (e) {
+      toast.error(`Like failed: ${errText(e)}`);
+      return null;
+    }
+  }
+
+  async postComment(target: AnyDhtHash, targetRole: string, body: string): Promise<void> {
+    try {
+      await this.social.createComment({ target, targetRole, body });
+      toast.success("Comment posted");
+      this.log("info", "Posted a comment");
+    } catch (e) {
+      toast.error(`Comment failed: ${errText(e)}`);
+      throw e;
+    }
+  }
+
+  async deleteComment(comment: ActionHash): Promise<void> {
+    try {
+      await this.social.deleteComment(comment);
+      toast.info("Comment deleted");
+    } catch (e) {
+      toast.error(`Delete failed: ${errText(e)}`);
+      throw e;
+    }
+  }
+
+  async createCollection(name: string, description: string): Promise<ActionHash> {
+    try {
+      const rec = await this.social.createCollection({ name, description });
+      const hash = recordActionHash(rec);
+      toast.success(`Created "${name}"`);
+      this.log("success", `Created collection "${name}"`);
+      await this.loadMyCollections();
+      return hash;
+    } catch (e) {
+      toast.error(`Create collection failed: ${errText(e)}`);
+      throw e;
+    }
+  }
+
+  async updateCollection(
+    previousActionHash: ActionHash,
+    name: string,
+    description: string,
+  ): Promise<void> {
+    try {
+      await this.social.updateCollection({ previousActionHash, name, description });
+      toast.success("Collection updated");
+      await this.loadMyCollections();
+    } catch (e) {
+      toast.error(`Update failed: ${errText(e)}`);
+      throw e;
+    }
+  }
+
+  async deleteCollection(collection: ActionHash): Promise<void> {
+    try {
+      await this.social.deleteCollection(collection);
+      toast.info("Collection deleted");
+      await this.loadMyCollections();
+    } catch (e) {
+      toast.error(`Delete failed: ${errText(e)}`);
+    }
+  }
+
+  async addToCollection(
+    collection: ActionHash,
+    target: AnyDhtHash,
+    targetRole: string,
+  ): Promise<void> {
+    try {
+      await this.social.addToCollection({ collection, target, targetRole });
+      toast.success("Added to collection");
+    } catch (e) {
+      toast.error(`Add to collection failed: ${errText(e)}`);
+    }
+  }
+
+  async removeFromCollection(collection: ActionHash, target: AnyDhtHash): Promise<void> {
+    try {
+      await this.social.removeFromCollection(collection, target);
+      toast.info("Removed from collection");
+    } catch (e) {
+      toast.error(`Remove failed: ${errText(e)}`);
     }
   }
 }

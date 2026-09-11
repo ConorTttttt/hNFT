@@ -1,0 +1,17 @@
+manifest_version: '0'
+name: social
+integrity:
+  network_seed: null
+  properties: null
+  zomes:
+  - name: social_integrity
+    hash: null
+    path: ../../../target/wasm32-unknown-unknown/release/social_integrity.wasm
+    dependencies: null
+coordinator:
+  zomes:
+  - name: social
+    hash: null
+    path: ../../../target/wasm32-unknown-unknown/release/social.wasm
+    dependencies:
+    - name: social_integrity

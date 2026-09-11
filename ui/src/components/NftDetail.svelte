@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { useAppState } from "$lib/appState.svelte";
-  import { b64, eqHash, nftTitle, relativeFuture, tsToMs } from "$lib/format";
+  import { NFT_ROLE, useAppState } from "$lib/appState.svelte";
+  import { b64, eqHash, nftTitle, relativeFuture, tsToMs, unb64 } from "$lib/format";
   import { toast } from "$lib/toast.svelte";
   import AgentBadge from "./AgentBadge.svelte";
+  import CommentThread from "./CommentThread.svelte";
+  import FollowButton from "./FollowButton.svelte";
+  import LikeButton from "./LikeButton.svelte";
   import ProvenanceTimeline from "./ProvenanceTimeline.svelte";
   import RevealFlow from "./RevealFlow.svelte";
   import TransferDialog from "./TransferDialog.svelte";
@@ -60,6 +63,13 @@
     !!nft && !iOwn && app.myNfts.some((v) => eqHash(v.nft, nft)),
   );
 
+  let addToCollectionTarget = $state("");
+  async function addToCollection() {
+    if (!nft || !addToCollectionTarget) return;
+    await app.addToCollection(unb64(addToCollectionTarget), nft, NFT_ROLE);
+    addToCollectionTarget = "";
+  }
+
   async function finalize() {
     if (!nft) return;
     finalizeBusy = true;
@@ -94,7 +104,10 @@
       <div class="row between">
         <div class="stack tight" style="min-width: 0">
           <h3 class="truncate">{nftTitle(d.manifest)}</h3>
-          <span class="pill {d.manifest.payload.status}">{d.manifest.payload.status}</span>
+          <div class="row" style="gap: 0.4rem">
+            <span class="pill {d.manifest.payload.status}">{d.manifest.payload.status}</span>
+            <LikeButton target={nft} targetRole={NFT_ROLE} />
+          </div>
         </div>
         <button class="ghost tiny" onclick={() => dlg?.close()}>Close ✕</button>
       </div>
@@ -131,10 +144,30 @@
           </button>
         </dd>
         <dt>minter</dt>
-        <dd><AgentBadge agent={d.minter} size={18} /></dd>
+        <dd class="row" style="gap: 0.4rem">
+          <AgentBadge agent={d.minter} size={18} />
+          {#if !app.isMe(d.minter)}<FollowButton agent={d.minter} />{/if}
+        </dd>
         <dt>owner</dt>
-        <dd><AgentBadge agent={d.owner} size={18} /></dd>
+        <dd class="row" style="gap: 0.4rem">
+          <AgentBadge agent={d.owner} size={18} />
+          {#if !app.isMe(d.owner)}<FollowButton agent={d.owner} />{/if}
+        </dd>
       </dl>
+
+      {#if app.myCollections.length}
+        <div class="row wrap" style="gap: 0.5rem; align-items: center">
+          <select bind:value={addToCollectionTarget}>
+            <option value="">Add to collection…</option>
+            {#each app.myCollections as c (b64(c.collection))}
+              <option value={b64(c.collection)}>{c.name}</option>
+            {/each}
+          </select>
+          <button class="ghost tiny" onclick={addToCollection} disabled={!addToCollectionTarget}>
+            Add
+          </button>
+        </div>
+      {/if}
 
       {#if ag}
         <div class="divider"></div>
@@ -220,6 +253,9 @@
       <div class="divider"></div>
       <h4>Provenance</h4>
       <ProvenanceTimeline hops={d.provenance} />
+
+      <div class="divider"></div>
+      <CommentThread target={nft} targetRole={NFT_ROLE} />
     {/if}
   </div>
 </dialog>

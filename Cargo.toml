@@ -35,3 +35,9 @@ path = "dnas/nft/zomes/coordinator/nft"
 
 [workspace.dependencies.nft_integrity]
 path = "dnas/nft/zomes/integrity/nft"
+
+[workspace.dependencies.social]
+path = "dnas/social/zomes/coordinator/social"
+
+[workspace.dependencies.social_integrity]
+path = "dnas/social/zomes/integrity/social"

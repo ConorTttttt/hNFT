@@ -1,8 +1,9 @@
 <script lang="ts">
   import type { ActionHash } from "@holochain/client";
-  import type { NftView } from "$lib/appState.svelte";
+  import { NFT_ROLE, type NftView } from "$lib/appState.svelte";
   import { nftTitle } from "$lib/format";
   import AgentBadge from "./AgentBadge.svelte";
+  import LikeButton from "./LikeButton.svelte";
 
   let {
     view,
@@ -62,6 +63,9 @@
       {#if payload.status === "sealed" && !view.hasSalt}
         <span class="pill danger" title="reveal salt not on this device">no salt</span>
       {/if}
+    </div>
+    <div class="row" onclick={(e) => e.stopPropagation()} role="presentation">
+      <LikeButton target={view.nft} targetRole={NFT_ROLE} />
     </div>
   </div>
 </div>

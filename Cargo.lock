@@ -7083,6 +7083,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "social"
+version = "0.0.1"
+dependencies = [
+ "hdk",
+ "holochain",
+ "holochain_serialized_bytes",
+ "serde",
+ "social_integrity",
+ "tokio",
+]
+
+[[package]]
+name = "social_integrity"
+version = "0.0.1"
+dependencies = [
+ "hdi",
+ "holochain_serialized_bytes",
+ "serde",
+]
+
+[[package]]
 name = "socket2"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
