@@ -44,10 +44,28 @@ EOF
 fi
 [ "${HC_SPIN_NO_SANDBOX:-}" = "1" ] && export ELECTRON_DISABLE_SANDBOX=1
 
-# Go through XWayland: native Wayland + Electron's Vulkan path produces a
-# "not compatible with Vulkan" warning and, on some GPUs, a black window.
-# Override with ELECTRON_OZONE_PLATFORM_HINT=wayland if you prefer native.
-export ELECTRON_OZONE_PLATFORM_HINT="${ELECTRON_OZONE_PLATFORM_HINT:-x11}"
+# If this shell is confined by a snap's AppArmor profile (e.g. it's a
+# terminal launched from inside the VS Code *snap*), Electron's sandboxed
+# child processes inherit that confinement, and unprivileged user-namespace
+# creation can end up blocked in a way this bundled Electron doesn't handle
+# gracefully — it hits an internal fatal check and dies (SIGTRAP, sometimes
+# SIGSEGV) before ever opening a window, independent of the chrome-sandbox
+# setuid fix above. Confirmed on this exact symptom; the fix is to run
+# `npm start` from a terminal that isn't under that confinement (a plain
+# terminal app, not the snap's integrated one) — there's no in-script
+# workaround for another program's AppArmor profile.
+if [ -r /proc/self/attr/current ] && grep -q '^snap\.' /proc/self/attr/current 2>/dev/null; then
+  cat >&2 <<EOF
+
+  Heads up: this shell is confined by $(cat /proc/self/attr/current 2>/dev/null)'s
+  AppArmor profile. That's been seen to crash the bundled Electron on launch
+  (SIGTRAP/SIGSEGV, no window ever opens) independent of the chrome-sandbox
+  setup above. If hc-spin crashes below, try running 'npm start' again from a
+  terminal that isn't inside that snap's confinement (e.g. a plain terminal
+  app instead of an editor's integrated one).
+
+EOF
+fi
 
 HAPP="workdir/p2p_art_marketplace.happ"
 if [ ! -f "$HAPP" ]; then
