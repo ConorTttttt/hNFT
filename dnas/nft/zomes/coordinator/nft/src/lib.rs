@@ -1,6 +1,7 @@
 pub mod agreement;
 pub mod listing;
 pub mod mint;
+pub mod payment;
 pub mod query;
 pub mod reveal;
 pub mod transfer;

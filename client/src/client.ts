@@ -160,6 +160,40 @@ export class NftClient {
     return out.commitment;
   }
 
+  /**
+   * Offer the NFT to `toAgent`, gated on a claimed Unyt `nft_sale_escrow`
+   * settlement — DEMO MODE: this is NOT independently re-verified against
+   * the Unyt network (see `payment.rs`'s module doc); the caller must have
+   * already read the RAVE and be passing its real `computed_values`. Once
+   * called, the resulting commitment goes through the exact same
+   * `acceptTransfer` flow as a free `initiateTransfer` offer.
+   *
+   * `nftId` must be built as `nft.toString()`-equivalent (this NFT's mint
+   * action hash, base64) to match the convention `payment.rs::nft_id_for`
+   * expects — the same value must be what got written into the Unyt
+   * listing's `nft_id` field when it was created.
+   */
+  async initiateTransferFromRave(args: {
+    nft: ActionHash;
+    toAgent: AgentPubKey;
+    rave: ActionHash;
+    fulfilled: boolean;
+    nftId: string;
+    newOwner: string;
+    previousOwner: string;
+  }): Promise<ActionHash> {
+    const out = await this.call<{ commitment: ActionHash }>("initiate_transfer_from_rave", {
+      nft: args.nft,
+      to_agent: args.toAgent,
+      rave: args.rave,
+      fulfilled: args.fulfilled,
+      nft_id: args.nftId,
+      new_owner: args.newOwner,
+      previous_owner: args.previousOwner,
+    });
+    return out.commitment;
+  }
+
   /** Accept an offer (must be the named buyer, within the transfer window). */
   acceptTransfer(commitment: ActionHash): Promise<HcRecord> {
     return this.call("accept_transfer", { commitment });

@@ -51,6 +51,26 @@ export interface TransferReceipt {
   commitment: ActionHash;
 }
 
+// --- Unyt settlement bridge (demo mode) --------------------------------------
+//
+// See `dnas/nft/zomes/coordinator/nft/src/payment.rs`'s module doc: this zome
+// does NOT re-verify the claimed RAVE against the Unyt network — the caller
+// (this client, ultimately whatever UI code read the RAVE) is trusted to have
+// read `output.computed_values` correctly. `fulfilled`/`nft_id`/`new_owner`/
+// `previous_owner` are exactly those four `computed_values` fields.
+
+export interface SettleFromRaveInput {
+  nft: ActionHash;
+  to_agent: AgentPubKey;
+  /** The Unyt RAVE's own action hash — carried through for the audit trail
+   * in the inbound-commitment link's tag; not re-fetched or re-checked. */
+  rave: ActionHash;
+  fulfilled: boolean;
+  nft_id: string;
+  new_owner: string;
+  previous_owner: string;
+}
+
 // --- reveal agreements -------------------------------------------------------
 
 /** Flattened `MintAgreement` from `agreement_for`. Timestamps are epoch micros. */
