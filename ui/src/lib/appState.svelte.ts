@@ -838,6 +838,45 @@ export class AppState {
     }
   }
 
+  /**
+   * DEMO MODE — see `payment.rs`'s module doc. This does not talk to Unyt at
+   * all; it's a stand-in for "the UI already read a real RAVE and is now
+   * passing its computed_values through." `nftId`/`newOwner`/`previousOwner`
+   * are computed by the caller from `nft`/`toAgent`/`this.me` so they can
+   * never drift from what `payment.rs::nft_id_for` expects — the only thing
+   * a demo operator actually chooses is `fulfilled` and who the buyer is.
+   */
+  async settleFromRave(
+    nft: ActionHash,
+    toAgent: AgentPubKey,
+    fulfilled: boolean,
+  ): Promise<ActionHash> {
+    try {
+      const commitment = await this.nft.initiateTransferFromRave({
+        nft,
+        toAgent,
+        // No real RAVE exists — the NFT's own mint hash is a valid ActionHash
+        // to carry in the audit-trail tag slot; it's never re-fetched or
+        // interpreted as anything but a placeholder (see payment.rs).
+        rave: nft,
+        fulfilled,
+        nftId: b64(nft),
+        newOwner: b64(toAgent),
+        previousOwner: b64(this.me),
+      });
+      await this.loadMyNfts();
+      toast.success(`Settled (demo) — offer sent to ${shortHash(toAgent)}`);
+      this.log(
+        "info",
+        `Offered ${shortHash(nft)} to ${shortHash(toAgent)} — settled via Unyt (demo)`,
+      );
+      return commitment;
+    } catch (e) {
+      toast.error(`Settlement failed: ${errText(e)}`);
+      throw e;
+    }
+  }
+
   async acceptOffer(commitment: ActionHash): Promise<void> {
     try {
       await this.nft.acceptTransfer(commitment);

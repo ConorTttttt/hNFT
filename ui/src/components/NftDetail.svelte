@@ -10,11 +10,13 @@
   import ProvenanceTimeline from "./ProvenanceTimeline.svelte";
   import RevealFlow from "./RevealFlow.svelte";
   import TransferDialog from "./TransferDialog.svelte";
+  import UnytSettleDialog from "./UnytSettleDialog.svelte";
 
   const app = useAppState();
 
   let dlg = $state<HTMLDialogElement>();
   let showTransfer = $state(false);
+  let showUnytSettle = $state(false);
   let finalizeBusy = $state(false);
   let imgOk = $state(true);
 
@@ -232,6 +234,9 @@
               <button class="primary" onclick={() => (showTransfer = true)}>
                 Transfer
               </button>
+              <button class="ghost" onclick={() => (showUnytSettle = true)}>
+                Settle via Unyt (demo)
+              </button>
               {#if app.isNftHidden(nft)}
                 <button class="ghost" onclick={() => app.unhideNft(nft)}>
                   Show in collection
@@ -266,6 +271,9 @@
 
 {#if showTransfer && nft}
   <TransferDialog {nft} onclose={() => (showTransfer = false)} />
+{/if}
+{#if showUnytSettle && nft}
+  <UnytSettleDialog {nft} onclose={() => (showUnytSettle = false)} />
 {/if}
 
 <style>
