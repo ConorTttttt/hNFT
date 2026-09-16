@@ -1,0 +1,30 @@
+{
+  "title": "example nft sale escrow",
+  "input_rules": [
+    {
+      "name": "listing",
+      "instruction": { "ProvidedBy": "seller" }
+    },
+    {
+      "name": "escrow_lock",
+      "instruction": { "ProvidedBy": "buyer_spender" }
+    }
+  ],
+  "executor_rules": { "AuthorizedExecutor": "uhCAk_placeholder_seller_agent_key" },
+  "roles": [
+    {
+      "ct_role_id": "seller",
+      "display_name": "Seller",
+      "description": "The current owner listing one specific NFT for sale: parks nft_id, unyt_index, price, and their own payout key, then triggers settlement once a matching escrow lock appears. Replace the placeholder key with the real seller agent key. A fresh agreement instance should be created per listing -- see README.",
+      "qualification": { "Authorized": ["uhCAk_placeholder_seller_agent_key"] }
+    },
+    {
+      "ct_role_id": "buyer_spender",
+      "display_name": "Buyer",
+      "description": "The party locking exactly the listed price as an escrow spend. Replace the placeholder key with the real buyer agent key, or use { \"Any\": null } to let any agent buy at the listed price -- see README for the trade-off.",
+      "qualification": { "Authorized": ["uhCAk_placeholder_buyer_agent_key"] }
+    }
+  ],
+  "tags": [{ "Public": "nft-sale-escrow" }],
+  "permissions": { "Default": null }
+}

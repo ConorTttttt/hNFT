@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "properties": {
+    "consumed_inputs": {
+      "type": "object",
+      "properties": {
+        "listing": {
+          "type": "object",
+          "properties": {
+            "nft_id": {
+              "type": "string",
+              "description": "Identifier of the NFT in the companion NFT registry -- e.g. that app's entry/action hash for the token. Not interpreted by this code; carried through as an opaque string."
+            },
+            "unyt_index": {
+              "type": "string"
+            },
+            "price": {
+              "type": "string",
+              "description": "The exact fuel amount the buyer's escrow lock must match, scoped to unyt_index above."
+            },
+            "receiver": {
+              "type": "string",
+              "description": "The seller's own payout agent key."
+            }
+          },
+          "required": ["nft_id", "unyt_index", "price", "receiver"],
+          "description": "Parked by the seller role -- the listing (which NFT, at what price, paid to whom). (aggregate_execution: false -- delivered as ONE { data, link_hash } envelope, and the engine's validator strips the envelope, so this schema describes the payload itself, not an array.)"
+        },
+        "escrow_lock": {
+          "type": "object",
+          "properties": {
+            "amount": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": ["amount", "source"],
+          "description": "Parked by the buyer_spender role -- the buyer's locked payment for this listing. (aggregate_execution: false -- delivered as ONE { data, link_hash } envelope, and the engine's validator strips the envelope, so this schema describes the payload itself, not an array.)"
+        }
+      },
+      "required": ["listing", "escrow_lock"]
+    }
+  },
+  "required": ["consumed_inputs"]
+}
