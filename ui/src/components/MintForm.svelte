@@ -18,9 +18,14 @@
   let busy = $state(false);
 
   // --- optional reveal agreement ---
+  const UNIT_MS = { seconds: 1_000, minutes: 60_000, hours: 3_600_000, days: 86_400_000 } as const;
+  type TimeUnit = keyof typeof UNIT_MS;
+
   let useAgreement = $state(false);
-  let revealByDays = $state(7);
-  let defaultAfterExtraDays = $state(7);
+  let revealByValue = $state(7);
+  let revealByUnit = $state<TimeUnit>("days");
+  let defaultAfterValue = $state(7);
+  let defaultAfterUnit = $state<TimeUnit>("days");
   let delegateKey = $state("");
   let autoReveal = $state(true);
 
@@ -36,9 +41,9 @@
       const commitment = prepareCommitment(cleaned, imageUri.trim());
 
       if (useAgreement) {
-        const revealBy = new Date(Date.now() + revealByDays * 86_400_000);
+        const revealBy = new Date(Date.now() + Math.max(1, revealByValue) * UNIT_MS[revealByUnit]);
         const defaultAfter = new Date(
-          revealBy.getTime() + Math.max(1, defaultAfterExtraDays) * 86_400_000,
+          revealBy.getTime() + Math.max(1, defaultAfterValue) * UNIT_MS[defaultAfterUnit],
         );
         const delegate = delegateKey.trim() ? unb64(delegateKey.trim()) : undefined;
         await app.mint(commitment, { revealBy, defaultAfter, delegate, autoReveal });
@@ -88,13 +93,37 @@
     <summary>Reveal agreement <span class="faint small">(optional)</span></summary>
     <div class="stack tight" style="margin-top: 0.5rem">
       <label class="field">
-        <span>Reveal within (days)</span>
-        <input type="number" min="1" bind:value={revealByDays} />
+        <span>Reveal within</span>
+        <div class="row" style="gap: 0.4rem">
+          <input type="number" min="1" style="max-width: 6rem" bind:value={revealByValue} />
+          <select bind:value={revealByUnit}>
+            <option value="seconds">seconds</option>
+            <option value="minutes">minutes</option>
+            <option value="hours">hours</option>
+            <option value="days">days</option>
+          </select>
+        </div>
       </label>
       <label class="field">
-        <span>Grace after that before it can be marked defaulted (days)</span>
-        <input type="number" min="1" bind:value={defaultAfterExtraDays} />
+        <span>Grace after that before it can be marked defaulted</span>
+        <div class="row" style="gap: 0.4rem">
+          <input type="number" min="1" style="max-width: 6rem" bind:value={defaultAfterValue} />
+          <select bind:value={defaultAfterUnit}>
+            <option value="seconds">seconds</option>
+            <option value="minutes">minutes</option>
+            <option value="hours">hours</option>
+            <option value="days">days</option>
+          </select>
+        </div>
       </label>
+      {#if revealByUnit !== "days" || defaultAfterUnit !== "days"}
+        <p class="faint small">
+          Short windows are handy for testing live, but the auto-reveal sweep
+          only checks every 5 minutes — a manual Reveal (or a delegate's,
+          once the deadline passes) shows the deadline gate working
+          immediately either way.
+        </p>
+      {/if}
       <label class="field">
         <span>Delegate agent key (optional) — may reveal after the deadline</span>
         <input class="mono" bind:value={delegateKey} placeholder="uhCAk…" />
