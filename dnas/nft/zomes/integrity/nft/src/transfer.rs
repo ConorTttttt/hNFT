@@ -17,6 +17,13 @@ pub struct TransferCommitment {
     pub prev_state: ActionHash,
     /// `1` for the first transfer, `+1` per hop thereafter.
     pub sequence: u32,
+    /// Set only for a blind-box redemption: the `BlindAssignmentReveal` that
+    /// authorizes this transfer. When present, validate() confirms
+    /// `to_agent` is exactly the purchase's own author -- see
+    /// `validate_create_transfer_commitment` below. `None` for an ordinary,
+    /// non-blind transfer.
+    #[serde(default)]
+    pub blind_reveal: Option<ActionHash>,
 }
 
 /// Authored by the BUYER named in the commitment. Accepting the offer.
@@ -92,6 +99,35 @@ pub fn validate_create_transfer_commitment(
             return Ok(ValidateCallbackResult::Invalid(
                 "first transfer must have sequence 1".into(),
             ));
+        }
+
+        // -- blind-box redemption binding --
+        if let Some(reveal_hash) = entry.blind_reveal.clone() {
+            let reveal_rec = must_get_valid_record(reveal_hash)?;
+            let reveal: crate::blind_collection::BlindAssignmentReveal = reveal_rec
+                .entry()
+                .to_app_option()
+                .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("{e:?}"))))?
+                .ok_or(wasm_error!(WasmErrorInner::Guest(
+                    "blind_reveal does not reference a BlindAssignmentReveal".into()
+                )))?;
+            if reveal_rec.action().author() != &seller {
+                return Ok(ValidateCallbackResult::Invalid(
+                    "blind_reveal was not authored by this transfer's seller".into(),
+                ));
+            }
+            if reveal.assigned_nft != entry.nft {
+                return Ok(ValidateCallbackResult::Invalid(
+                    "blind_reveal.assigned_nft does not match this transfer's nft".into(),
+                ));
+            }
+            let purchase_rec = must_get_valid_record(reveal.purchase.clone())?;
+            let buyer = purchase_rec.action().author().clone();
+            if entry.to_agent != buyer {
+                return Ok(ValidateCallbackResult::Invalid(
+                    "blind-box transfer must go to the purchase's own author".into(),
+                ));
+            }
         }
     } else {
         // Later transfer: prev_state is the previously accepted TransferReceipt.

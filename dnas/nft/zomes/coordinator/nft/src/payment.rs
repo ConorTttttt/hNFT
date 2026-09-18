@@ -138,6 +138,7 @@ pub fn initiate_transfer_from_rave(
         to_agent: input.to_agent.clone(),
         prev_state,
         sequence,
+        blind_reveal: None,
     };
     let commitment_hash = create_entry(&EntryTypes::TransferCommitment(commitment))?;
 

@@ -22,6 +22,20 @@ pub struct CollectionProperties {
     /// is only valid *within* the window. The two verdicts are therefore disjoint
     /// by action timestamp. Baked into the DNA so every validator agrees.
     pub transfer_window_secs: u64,
+    /// Seconds after a `BlindPurchaseCommitment` before anyone may author a
+    /// `BlindPurchaseAbandoned` marker for it. Same shape as
+    /// `transfer_window_secs`; see `blind_collection.rs`'s
+    /// `validate_create_blind_purchase_abandoned` and DESIGN.md "Resolution
+    /// liveness" for what this marker does and doesn't do (UI-only signal
+    /// for this demo -- no on-chain dispute/refund path).
+    #[serde(default)]
+    pub blind_resolution_window_secs: u64,
+    /// Base64 X25519 public key the minter publishes so buyers can encrypt
+    /// `buyer_nonce` to them for blind-box purchases (see DESIGN.md "Nonce
+    /// delivery"). `None` if this collection doesn't run blind-box sales.
+    /// Never read inside `validate()` -- purely a coordinator-side lookup.
+    #[serde(default)]
+    pub minter_x25519_pubkey: Option<String>,
 }
 
 impl CollectionProperties {

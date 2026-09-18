@@ -1,4 +1,5 @@
 pub mod agreement;
+pub mod blind_collection;
 pub mod dna_properties;
 pub mod links;
 pub mod listing;
@@ -6,6 +7,7 @@ pub mod nft_manifest;
 pub mod transfer;
 
 pub use agreement::*;
+pub use blind_collection::*;
 pub use dna_properties::*;
 pub use links::*;
 pub use listing::*;
@@ -28,6 +30,10 @@ pub enum EntryTypes {
     #[entry_type(visibility = "private")]
     RevealSecret(RevealSecret),
     Listing(Listing),
+    BlindBatchCommitment(BlindBatchCommitment),
+    BlindPurchaseCommitment(BlindPurchaseCommitment),
+    BlindAssignmentReveal(BlindAssignmentReveal),
+    BlindPurchaseAbandoned(BlindPurchaseAbandoned),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -92,6 +98,14 @@ fn validate_create_entry(
         EntryTypes::RevealDefault(e) => validate_create_reveal_default(action, e),
         EntryTypes::RevealSecret(e) => validate_create_reveal_secret(action, e),
         EntryTypes::Listing(e) => validate_create_listing(action, e),
+        EntryTypes::BlindBatchCommitment(e) => validate_create_blind_batch_commitment(action, e),
+        EntryTypes::BlindPurchaseCommitment(e) => {
+            validate_create_blind_purchase_commitment(action, e)
+        }
+        EntryTypes::BlindAssignmentReveal(e) => validate_create_blind_assignment_reveal(action, e),
+        EntryTypes::BlindPurchaseAbandoned(e) => {
+            validate_create_blind_purchase_abandoned(action, e)
+        }
     }
 }
 

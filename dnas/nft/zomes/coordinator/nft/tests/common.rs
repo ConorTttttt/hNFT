@@ -18,6 +18,25 @@ pub fn dev_props(
         minter_pubkey: minter.map(|a| a.to_string()),
         royalty_bps: 0,
         transfer_window_secs,
+        blind_resolution_window_secs: 0,
+        minter_x25519_pubkey: None,
+    }
+}
+
+/// Same as [`dev_props`], plus the fields blind-box sales need:
+/// `blind_resolution_window_secs` and the minter's own `minter_x25519_pubkey`
+/// (hex-encoded, from `generate_minter_x25519_pubkey`).
+pub fn dev_props_blind(
+    minter: Option<AgentPubKey>,
+    max_supply: u32,
+    transfer_window_secs: u64,
+    blind_resolution_window_secs: u64,
+    minter_x25519_pubkey: String,
+) -> CollectionProperties {
+    CollectionProperties {
+        blind_resolution_window_secs,
+        minter_x25519_pubkey: Some(minter_x25519_pubkey),
+        ..dev_props(minter, max_supply, transfer_window_secs)
     }
 }
 

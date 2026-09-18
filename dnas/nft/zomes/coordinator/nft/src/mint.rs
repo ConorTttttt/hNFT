@@ -45,9 +45,21 @@ pub struct MintWithAgreementInput {
 
 /// Create the sealed manifest + its discovery / ownership-index links.
 fn mint_manifest(metadata_hash: [u8; 32]) -> ExternResult<(ActionHash, Record)> {
+    mint_manifest_in_batch(metadata_hash, None, None)
+}
+
+/// Same as [`mint_manifest`], but able to tag the mint with its blind-box
+/// batch membership. `batch`/`batch_slot` must be both `Some` or both `None`.
+pub(crate) fn mint_manifest_in_batch(
+    metadata_hash: [u8; 32],
+    batch: Option<ActionHash>,
+    batch_slot: Option<u32>,
+) -> ExternResult<(ActionHash, Record)> {
     let nft = NftManifest {
         metadata_hash,
         payload: NftPayload::Sealed,
+        batch,
+        batch_slot,
     };
     let nft_hash = create_entry(&EntryTypes::NftManifest(nft))?;
 

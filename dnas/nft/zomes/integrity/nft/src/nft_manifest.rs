@@ -14,6 +14,16 @@ pub struct NftManifest {
     pub metadata_hash: [u8; 32],
     /// `Sealed` at mint; flipped to `Revealed` exactly once via `update_entry`.
     pub payload: NftPayload,
+    /// The `BlindBatchCommitment` this mint belongs to, if minted as part of
+    /// a blind-box batch. `None` for an ordinary, non-blind mint. Immutable
+    /// across the Sealed -> Revealed update -- see `validate_update_nft_manifest`.
+    #[serde(default)]
+    pub batch: Option<ActionHash>,
+    /// This mint's fixed position within its batch (0..batch_size), assigned
+    /// sequentially by the minter at mint time. `None` iff `batch` is `None`.
+    /// Immutable across the Sealed -> Revealed update.
+    #[serde(default)]
+    pub batch_slot: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -206,6 +216,16 @@ pub fn validate_update_nft_manifest(
     if nft.metadata_hash != original_nft.metadata_hash {
         return Ok(ValidateCallbackResult::Invalid(
             "metadata_hash may not change on reveal".into(),
+        ));
+    }
+    if nft.batch != original_nft.batch {
+        return Ok(ValidateCallbackResult::Invalid(
+            "batch may not change on reveal".into(),
+        ));
+    }
+    if nft.batch_slot != original_nft.batch_slot {
+        return Ok(ValidateCallbackResult::Invalid(
+            "batch_slot may not change on reveal".into(),
         ));
     }
     let NftPayload::Revealed {

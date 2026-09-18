@@ -114,6 +114,57 @@ export interface ListingView {
   seller: AgentPubKey;
 }
 
+// --- blind-box collections ---------------------------------------------------
+//
+// See `dnas/nft/zomes/coordinator/nft/src/blind.rs` and
+// `docs/blind-box-collections.md`. Mirrors the actual Rust structs — field
+// shapes below are confirmed against `blind.rs`, not inferred.
+
+/** The `BlindPurchaseCommitment` entry as it decodes off the wire (`decodeEntry`). */
+export interface BlindPurchaseCommitment {
+  batch: ActionHash;
+  /** 32 bytes, MessagePack array of ints on the wire. */
+  nonce_hash: number[];
+  /** Opaque to the client — never decrypt or interpret this here. */
+  encrypted_nonce: number[];
+}
+
+export interface MintBlindBatchOutput {
+  batch: ActionHash;
+  /** Sealed mint action hashes, in slot order (`nfts[i]` is slot `i`). */
+  nfts: ActionHash[];
+}
+
+export interface ReserveBlindPurchaseOutput {
+  purchase: ActionHash;
+  /**
+   * Generated and returned by the zome call itself — NOT generated
+   * client-side. The buyer's client must hold onto this (same as a reveal
+   * salt) to be able to confirm the eventual `BlindAssignmentReveal`
+   * matches what they actually committed to. There is no way to recover
+   * it later — only its hash is ever committed on-chain.
+   */
+  buyerNonce: Uint8Array;
+}
+
+export interface ResolveBlindAssignmentInput {
+  purchase: ActionHash;
+  /** The minter's own secret for this batch — 32 bytes. */
+  mintSeed: Uint8Array;
+  /** Audit-trail hash, same role as in `initiate_transfer_from_rave`. */
+  rave: ActionHash;
+  fulfilled: boolean;
+  nftId: string;
+  newOwner: string;
+  previousOwner: string;
+}
+
+export interface ResolveBlindAssignmentOutput {
+  reveal: ActionHash;
+  assignedNft: ActionHash;
+  commitment: ActionHash;
+}
+
 // --- coordinator I/O ------------------------------------------------------------
 
 export interface MintNftOutput {

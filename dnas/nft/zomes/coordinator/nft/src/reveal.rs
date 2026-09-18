@@ -89,6 +89,8 @@ pub(crate) fn do_reveal(
             image_uri: secret.image_uri,
             agreement: agreement_hash_for(&nft)?,
         },
+        batch: original_manifest.batch,
+        batch_slot: original_manifest.batch_slot,
     };
 
     let updated_hash = update_entry(previous_action_hash, &revealed)?;

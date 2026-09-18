@@ -13,11 +13,15 @@ import type {
   DelegatedRevealView,
   ListingView,
   LocalSignal,
+  MintBlindBatchOutput,
   MintNftOutput,
   NftAttribute,
   NftManifest,
   ProvenanceHop,
   RemoteSignal,
+  ReserveBlindPurchaseOutput,
+  ResolveBlindAssignmentInput,
+  ResolveBlindAssignmentOutput,
 } from "./types.js";
 
 export interface NftClientOptions {
@@ -278,6 +282,86 @@ export class NftClient {
           imageUri: raw.image_uri,
         }
       : null;
+  }
+
+  // --- blind-box collections ---------------------------------------------
+  // See `blind.rs`. Field shapes here are confirmed against the actual
+  // Rust structs, not inferred from the handoff docs.
+
+  /**
+   * Mint a blind-box batch: `metadataHashes[i]` is the commitment for slot
+   * `i` (computed with `prepareCommitment`, same as an ordinary mint — one
+   * per NFT in the batch). `mintSeed` is the minter's own secret; there is
+   * no on-chain way to recover it, so the caller must hold onto it (keyed
+   * by the returned `batch` hash) until every purchase against this batch
+   * has been resolved.
+   */
+  mintBlindBatch(
+    metadataHashes: Uint8Array[],
+    mintSeed: Uint8Array,
+  ): Promise<MintBlindBatchOutput> {
+    return this.call("mint_blind_batch", {
+      metadata_hashes: metadataHashes.map(bytes32),
+      mint_seed: bytes32(mintSeed),
+    });
+  }
+
+  /**
+   * Buyer-side: reserve a purchase against a batch. The nonce is generated
+   * AND encrypted to the minter's X25519 key entirely inside this zome
+   * call (HDK's `random_bytes` + `create_x25519_keypair` +
+   * `x_25519_x_salsa20_poly1305_encrypt`) — the caller supplies nothing but
+   * `batch`. The returned `buyerNonce` must be held onto client-side (same
+   * pattern as a reveal salt) — it's the caller's only way to later verify
+   * the eventual `BlindAssignmentReveal` matches what was actually
+   * committed to; there's no way to recover it from chain.
+   */
+  async reserveBlindPurchase(batch: ActionHash): Promise<ReserveBlindPurchaseOutput> {
+    const out = await this.call<{ purchase: ActionHash; buyer_nonce: number[] }>(
+      "reserve_blind_purchase",
+      { batch },
+    );
+    return { purchase: out.purchase, buyerNonce: Uint8Array.from(out.buyer_nonce) };
+  }
+
+  /**
+   * Read back a `BlindPurchaseCommitment` — immutable, so (unlike
+   * `getListing`) this is a plain `get`, not an update-chain walk. The
+   * record's own author is the authoritative buyer; `decodeEntry` gets you
+   * `batch`/`nonce_hash`/`encrypted_nonce`.
+   */
+  getBlindPurchase(purchase: ActionHash): Promise<HcRecord | null> {
+    return this.call("get_blind_purchase", purchase);
+  }
+
+  /**
+   * Minter-side, demo mode — direct extension of `initiateTransferFromRave`'s
+   * trust model (see its own doc comment): the caller supplies the claimed
+   * settlement fields; this zome does NOT re-verify them against Unyt.
+   * `mintSeed` must be the exact bytes `mintBlindBatch` was called with for
+   * this purchase's batch.
+   */
+  async resolveBlindAssignmentFromRave(
+    input: ResolveBlindAssignmentInput,
+  ): Promise<ResolveBlindAssignmentOutput> {
+    const out = await this.call<{
+      reveal: ActionHash;
+      assigned_nft: ActionHash;
+      commitment: ActionHash;
+    }>("resolve_blind_assignment_from_rave", {
+      purchase: input.purchase,
+      mint_seed: bytes32(input.mintSeed),
+      rave: input.rave,
+      fulfilled: input.fulfilled,
+      nft_id: input.nftId,
+      new_owner: input.newOwner,
+      previous_owner: input.previousOwner,
+    });
+    return {
+      reveal: out.reveal,
+      assignedNft: out.assigned_nft,
+      commitment: out.commitment,
+    };
   }
 
   // --- listings ----------------------------------------------------------
