@@ -324,6 +324,26 @@ export class NftClient {
     return { purchase: out.purchase, buyerNonce: Uint8Array.from(out.buyer_nonce) };
   }
 
+  /** Every blind-box batch ever minted in this collection, any minter.
+   * Discovery only, mirrors `getAllNfts` — `decodeEntry` per item for
+   * `batch_size`/`seed_hash`. */
+  getAllBlindBatches(): Promise<HcRecord[]> {
+    return this.call("get_all_blind_batches", null);
+  }
+
+  /** Purchases reserved against `batch`, any buyer — the minter's own
+   * resolution queue, mirrors `interestedBuyers`. */
+  purchasesForBatch(batch: ActionHash): Promise<HcRecord[]> {
+    return this.call("purchases_for_batch", batch);
+  }
+
+  /** Purchases against `batch` the CALLING minter has already resolved —
+   * own-chain scan, only meaningful for the batch's own minter. Lets a UI
+   * filter an already-resolved purchase out of the resolution queue. */
+  resolvedPurchasesForBatch(batch: ActionHash): Promise<ActionHash[]> {
+    return this.call("resolved_purchases_for_batch", batch);
+  }
+
   /**
    * Read back a `BlindPurchaseCommitment` — immutable, so (unlike
    * `getListing`) this is a plain `get`, not an update-chain walk. The

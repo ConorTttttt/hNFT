@@ -12,6 +12,7 @@ import {
   decodeNftManifest,
   recordActionHash,
   type AgreementView,
+  type BlindBatchCommitment,
   type BlindPurchaseCommitment,
   type CollectionInfo,
   type CollectionItemView,
@@ -108,6 +109,22 @@ export interface InterestRow {
   buyer: AgentPubKey;
 }
 
+/** A discoverable blind-box batch, any minter — see docs/blind-box-collections.md. */
+export interface BlindBatchView {
+  batch: ActionHash;
+  batchSize: number;
+  minter: AgentPubKey;
+  mintedAtMs: number;
+}
+
+/** A purchase awaiting resolution against one of this agent's own batches. */
+export interface BlindPurchaseRow {
+  purchase: ActionHash;
+  batch: ActionHash;
+  buyer: AgentPubKey;
+  reservedAtMs: number;
+}
+
 export interface NftDetail {
   manifest: DecodedNftManifest;
   /** Author of the latest manifest record — always the minter (only the minter reveals). */
@@ -181,7 +198,7 @@ export class AppState {
   isMinter = $state(false);
 
   /** Which top-level view is showing; owned here so signals can navigate. */
-  view = $state<"collection" | "discover" | "collections" | "activity">("collection");
+  view = $state<"collection" | "discover" | "collections" | "activity" | "blind">("collection");
   /** Commitment to flash in the offers list (set from a "new offer" toast). */
   highlightOffer = $state<ActionHash | null>(null);
 
@@ -191,6 +208,7 @@ export class AppState {
   discover = $state<NftView[]>([]);
   discoverLoading = $state(false);
   private discoverLoaded = false;
+  private blindBatchesLoaded = false;
   /** NFTs this device minted that are still sealed — revealable regardless of ownership. */
   drafts = $state<DraftView[]>([]);
   /** NFTs this agent is the reveal delegate for. */
@@ -202,6 +220,12 @@ export class AppState {
   myListings = $state<ListingView[]>([]);
   /** Interest expressed in any of `myListings` — the seller's queue. */
   interestInMyListings = $state<InterestRow[]>([]);
+
+  /** Every blind-box batch in the collection, any minter. */
+  blindBatches = $state<BlindBatchView[]>([]);
+  blindBatchesLoading = $state(false);
+  /** Purchases awaiting resolution against this agent's OWN batches. */
+  myBatchPurchases = $state<BlindPurchaseRow[]>([]);
 
   inbox = $state<InboundOffer[]>([]);
   inboxLoading = $state(false);
@@ -236,6 +260,9 @@ export class AppState {
   });
   private readonly refreshDetail = new Debounced(() => {
     if (this.detailNft) void this.loadDetail(this.detailNft);
+  });
+  private readonly refreshBlindBatches = new Debounced(() => {
+    if (this.blindBatchesLoaded) void this.loadBlindBatches();
   });
 
   constructor(client: AppWebsocket, me: AgentPubKey, roleName?: string) {
@@ -507,12 +534,20 @@ export class AppState {
         this.log("info", "New interest in a listing");
         void this.loadInterestQueue();
         break;
+      case "BlindPurchaseReserved":
+        toast.info("Someone reserved a blind-box purchase against your batch", () => {
+          this.view = "blind";
+        });
+        this.log("info", "New blind-box purchase reserved against your batch");
+        if (this.blindBatchesLoaded) void this.loadMyBatchPurchases();
+        break;
       default:
         // local post_commit Signals: EntryCreated / EntryUpdated / LinkCreated / …
         this.refreshWallet.trigger();
         this.refreshInbox.trigger();
         this.refreshDetail.trigger();
         this.refreshDiscover.trigger();
+        this.refreshBlindBatches.trigger();
     }
   }
 
@@ -612,6 +647,69 @@ export class AppState {
       this.error = String(e);
     } finally {
       this.discoverLoading = false;
+    }
+  }
+
+  /** Switch to the blind-box view, loading its contents the first time. */
+  async openBlindBoxes(): Promise<void> {
+    this.view = "blind";
+    if (!this.blindBatchesLoaded) await this.loadBlindBatches();
+  }
+
+  /** Every blind-box batch in the collection, any minter. */
+  async loadBlindBatches(): Promise<void> {
+    this.blindBatchesLoading = true;
+    try {
+      const records = await this.nft.getAllBlindBatches();
+      this.blindBatches = records.map((r) => {
+        const entry = decodeEntry<BlindBatchCommitment>(r);
+        const header = r.signed_action.hashed.content.header;
+        return {
+          batch: recordActionHash(r),
+          batchSize: entry.batch_size,
+          minter: header.author,
+          mintedAtMs: tsToMs(header.timestamp),
+        } satisfies BlindBatchView;
+      });
+      this.blindBatchesLoaded = true;
+      await this.loadMyBatchPurchases();
+      this.error = null;
+    } catch (e) {
+      this.error = String(e);
+    } finally {
+      this.blindBatchesLoading = false;
+    }
+  }
+
+  /** Purchases awaiting resolution against batches THIS agent minted —
+   * the minter's own resolution queue. Depends on `blindBatches` already
+   * being loaded (to know which batches are "mine"). */
+  async loadMyBatchPurchases(): Promise<void> {
+    try {
+      const myBatches = this.blindBatches.filter((b) => eqHash(b.minter, this.me));
+      const rows = await Promise.all(
+        myBatches.map(async (b) => {
+          const [purchaseRecords, resolved] = await Promise.all([
+            this.nft.purchasesForBatch(b.batch).catch(() => []),
+            this.nft.resolvedPurchasesForBatch(b.batch).catch(() => []),
+          ]);
+          const resolvedKeys = new Set(resolved.map((h) => b64(h)));
+          return purchaseRecords
+            .filter((r) => !resolvedKeys.has(b64(recordActionHash(r))))
+            .map((r) => {
+              const header = r.signed_action.hashed.content.header;
+              return {
+                purchase: recordActionHash(r),
+                batch: b.batch,
+                buyer: header.author,
+                reservedAtMs: tsToMs(header.timestamp),
+              } satisfies BlindPurchaseRow;
+            });
+        }),
+      );
+      this.myBatchPurchases = rows.flat();
+    } catch (e) {
+      this.error = String(e);
     }
   }
 

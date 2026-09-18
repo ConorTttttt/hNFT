@@ -5,6 +5,7 @@
   import { theme, toggleTheme } from "$lib/theme.svelte";
   import ActivityFeed from "./components/ActivityFeed.svelte";
   import AgentBadge from "./components/AgentBadge.svelte";
+  import BlindBoxesView from "./components/BlindBoxesView.svelte";
   import CollectionsView from "./components/CollectionsView.svelte";
   import DiscoverGrid from "./components/DiscoverGrid.svelte";
   import MintDialog from "./components/MintDialog.svelte";
@@ -86,6 +87,9 @@
       <button class:active={a.view === "discover"} onclick={() => a.openDiscover()}>
         Discover
       </button>
+      <button class:active={a.view === "blind"} onclick={() => a.openBlindBoxes()}>
+        Blind boxes
+      </button>
       <button class:active={a.view === "collections"} onclick={() => (a.view = "collections")}>
         Collections
       </button>
@@ -122,6 +126,8 @@
       <WalletGrid onmint={() => (showMint = true)} />
     {:else if a.view === "discover"}
       <DiscoverGrid />
+    {:else if a.view === "blind"}
+      <BlindBoxesView />
     {:else if a.view === "collections"}
       <CollectionsView />
     {:else}

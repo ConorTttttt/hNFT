@@ -136,6 +136,14 @@ pub fn mint_blind_batch(input: MintBlindBatchInput) -> ExternResult<MintBlindBat
         seed_hash,
     }))?;
 
+    let path = Path::from(crate::COLLECTION_PATH);
+    create_link(
+        path.path_entry_hash()?,
+        batch_hash.clone(),
+        LinkTypes::PathToBlindBatch,
+        (),
+    )?;
+
     let mut nfts = Vec::with_capacity(input.metadata_hashes.len());
     for (slot, metadata_hash) in input.metadata_hashes.into_iter().enumerate() {
         let (nft_hash, _) = crate::mint::mint_manifest_in_batch(
@@ -175,7 +183,8 @@ pub struct ReserveBlindPurchaseOutput {
 pub fn reserve_blind_purchase(
     input: ReserveBlindPurchaseInput,
 ) -> ExternResult<ReserveBlindPurchaseOutput> {
-    must_get_valid_record(input.batch.clone())?; // the batch is real
+    let batch_rec = must_get_valid_record(input.batch.clone())?; // the batch is real
+    let minter = batch_rec.action().author().clone();
 
     let nonce_bytes = random_bytes(32)?;
     let buyer_nonce: [u8; 32] = nonce_bytes.as_ref().try_into().map_err(|_| {
@@ -199,16 +208,92 @@ pub fn reserve_blind_purchase(
 
     let purchase_hash = create_entry(&EntryTypes::BlindPurchaseCommitment(
         BlindPurchaseCommitment {
-            batch: input.batch,
+            batch: input.batch.clone(),
             nonce_hash,
             encrypted_nonce,
         },
     ))?;
 
+    // Lets the minter discover this purchase against their own batch,
+    // mirroring NftToListing's "is this listed" role.
+    create_link(
+        input.batch,
+        purchase_hash.clone(),
+        LinkTypes::BatchToPurchase,
+        (),
+    )?;
+
+    // Best-effort nudge (not load-bearing -- BatchToPurchase is the durable
+    // discovery path). Mirrors TransferOffered/ListingInterest.
+    let _ = send_remote_signal(
+        RemoteSignal::BlindPurchaseReserved {
+            batch: batch_rec.action_address().clone(),
+            purchase: purchase_hash.clone(),
+        },
+        vec![minter],
+    );
+
     Ok(ReserveBlindPurchaseOutput {
         purchase: purchase_hash,
         buyer_nonce,
     })
+}
+
+/// Every blind-box batch ever minted in this collection, any minter.
+/// Discovery only, mirrors `get_all_nfts` -- callers that need `batch_size`
+/// or `seed_hash` should `decodeEntry` per item; this doesn't decode for
+/// them, same as `get_all_nfts` returns raw mint records.
+#[hdk_extern]
+pub fn get_all_blind_batches(_: ()) -> ExternResult<Vec<Record>> {
+    let path = Path::from(crate::COLLECTION_PATH);
+    let links = get_links(
+        LinkQuery::try_new(path.path_entry_hash()?, LinkTypes::PathToBlindBatch)?,
+        GetStrategy::Network,
+    )?;
+    let get_inputs: Vec<GetInput> = links
+        .into_iter()
+        .filter_map(|l| l.target.into_action_hash())
+        .map(|h| GetInput::new(h.into(), GetOptions::default()))
+        .collect();
+    let records = HDK.with(|hdk| hdk.borrow().get(get_inputs))?;
+    Ok(records.into_iter().flatten().collect())
+}
+
+/// Purchases reserved against `batch`, any buyer -- the minter's own
+/// resolution queue. Mirrors `interested_buyers`'s "seller's queue" role.
+#[hdk_extern]
+pub fn purchases_for_batch(batch: ActionHash) -> ExternResult<Vec<Record>> {
+    let links = get_links(
+        LinkQuery::try_new(batch, LinkTypes::BatchToPurchase)?,
+        GetStrategy::Network,
+    )?;
+    let get_inputs: Vec<GetInput> = links
+        .into_iter()
+        .filter_map(|l| l.target.into_action_hash())
+        .map(|h| GetInput::new(h.into(), GetOptions::default()))
+        .collect();
+    let records = HDK.with(|hdk| hdk.borrow().get(get_inputs))?;
+    Ok(records.into_iter().flatten().collect())
+}
+
+/// Purchases against `batch` that this (calling) minter has already
+/// resolved -- an own-chain scan, same technique as `taken_slots_for_batch`.
+/// Only meaningful when called by the batch's own minter; lets the UI hide
+/// already-resolved purchases from the resolution queue instead of leaving
+/// them there confusingly forever.
+#[hdk_extern]
+pub fn resolved_purchases_for_batch(batch: ActionHash) -> ExternResult<Vec<ActionHash>> {
+    let records = query(ChainQueryFilter::new().include_entries(true))?;
+    let mut resolved = Vec::new();
+    for rec in records {
+        let Ok(Some(reveal)) = rec.entry().to_app_option::<BlindAssignmentReveal>() else {
+            continue;
+        };
+        if reveal.batch == batch {
+            resolved.push(reveal.purchase);
+        }
+    }
+    Ok(resolved)
 }
 
 /// Read back a `BlindPurchaseCommitment` (immutable — never updated, so

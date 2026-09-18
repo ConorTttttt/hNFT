@@ -68,6 +68,11 @@ pub enum LinkTypes {
     ListingToInterested,
     /// buyer AgentPubKey -> Listing action hash. "Listings I'm interested in".
     AgentToInterest,
+    /// `Path("collection.all")` -> BlindBatchCommitment action. Global discovery.
+    PathToBlindBatch,
+    /// BlindBatchCommitment action -> BlindPurchaseCommitment action. The
+    /// minter's discovery of purchases against their own batch.
+    BatchToPurchase,
 }
 
 #[hdk_extern]
@@ -181,6 +186,8 @@ fn validate_create_link(
         LinkTypes::ListingUpdates => validate_create_link_listing_updates(action),
         LinkTypes::AgentToInterest => validate_create_link_agent_to_interest(action),
         LinkTypes::ListingToInterested => validate_create_link_listing_to_interested(action),
+        LinkTypes::PathToBlindBatch => validate_create_link_path_to_blind_batch(action),
+        LinkTypes::BatchToPurchase => validate_create_link_batch_to_purchase(action),
     }
 }
 
@@ -208,6 +215,9 @@ fn validate_delete_link(
         | LinkTypes::ListingUpdates
         | LinkTypes::AgentToInterest
         | LinkTypes::ListingToInterested => validate_delete_link_permanent(action, original_action),
+        LinkTypes::PathToBlindBatch | LinkTypes::BatchToPurchase => {
+            validate_delete_link_permanent(action, original_action)
+        }
     }
 }
 

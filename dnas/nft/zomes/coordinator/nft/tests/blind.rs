@@ -280,3 +280,78 @@ async fn fully_assigned_batch_rejects_further_resolution() {
         .await;
     assert!(r2.is_err(), "resolving against a fully-assigned batch must fail");
 }
+
+/// Batch/purchase discovery: `get_all_blind_batches`, `purchases_for_batch`,
+/// and `resolved_purchases_for_batch` (the minter's resolution-queue
+/// filter). Exercises the `PathToBlindBatch`/`BatchToPurchase` links added
+/// alongside the UI wiring.
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_and_purchase_discovery() {
+    let (conductor, cells, minter_key, buyer_key) = setup_blind_collection(0, 300, 300).await;
+    let minter_zome = cells[0].zome(ZOME);
+    let buyer_zome = cells[1].zome(ZOME);
+
+    let mint_seed = [13u8; 32];
+    let batch: MintBlindBatchOutput = conductor
+        .call(
+            &minter_zome,
+            "mint_blind_batch",
+            MintBlindBatchInput {
+                metadata_hashes: vec![metadata_hash(1), metadata_hash(2)],
+                mint_seed,
+            },
+        )
+        .await;
+    await_consistency(&cells).await.unwrap();
+
+    // Discoverable by anyone before any purchase exists.
+    let batches: Vec<Record> = conductor.call(&buyer_zome, "get_all_blind_batches", ()).await;
+    assert!(
+        batches.iter().any(|r| r.action_address() == &batch.batch),
+        "minted batch must be globally discoverable"
+    );
+
+    let p1: ReserveBlindPurchaseOutput = conductor
+        .call(&buyer_zome, "reserve_blind_purchase", ReserveBlindPurchaseInput { batch: batch.batch.clone() })
+        .await;
+    await_consistency(&cells).await.unwrap();
+
+    // The minter sees the pending purchase in their resolution queue.
+    let pending: Vec<Record> = conductor
+        .call(&minter_zome, "purchases_for_batch", batch.batch.clone())
+        .await;
+    assert!(
+        pending.iter().any(|r| r.action_address() == &p1.purchase),
+        "minter must see the reserved purchase against their own batch"
+    );
+    let resolved_before: Vec<ActionHash> = conductor
+        .call(&minter_zome, "resolved_purchases_for_batch", batch.batch.clone())
+        .await;
+    assert!(
+        resolved_before.is_empty(),
+        "nothing is resolved yet"
+    );
+
+    let _resolved: ResolveBlindAssignmentOutput = conductor
+        .call(
+            &minter_zome,
+            "resolve_blind_assignment_from_rave",
+            ResolveBlindAssignmentInput {
+                purchase: p1.purchase.clone(),
+                mint_seed,
+                rave: p1.purchase.clone(),
+                fulfilled: true,
+                nft_id: p1.purchase.to_string(),
+                new_owner: buyer_key.to_string(),
+                previous_owner: minter_key.to_string(),
+            },
+        )
+        .await;
+
+    // Now resolved_purchases_for_batch reflects it, so a UI can filter the
+    // queue.
+    let resolved_after: Vec<ActionHash> = conductor
+        .call(&minter_zome, "resolved_purchases_for_batch", batch.batch.clone())
+        .await;
+    assert_eq!(resolved_after, vec![p1.purchase.clone()]);
+}

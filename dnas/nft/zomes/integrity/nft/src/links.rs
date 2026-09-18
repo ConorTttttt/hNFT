@@ -1,4 +1,5 @@
 use crate::agreement::{MintAgreement, RevealDefault};
+use crate::blind_collection::{load_purchase_commitment, BlindBatchCommitment};
 use crate::nft_manifest::{is_create_of, NftManifest};
 use crate::transfer::{load_commitment, load_receipt, TransferReceipt};
 use crate::UnitEntryTypes;
@@ -217,6 +218,40 @@ pub fn validate_delete_link_agent_to_nft(
     if action.author() != original_action.author() {
         return Ok(ValidateCallbackResult::Invalid(
             "only the link author may remove their ownership-index link".into(),
+        ));
+    }
+    Ok(ValidateCallbackResult::Valid)
+}
+
+// --- PathToBlindBatch : discovery, permanent --------------------------------
+
+pub fn validate_create_link_path_to_blind_batch(
+    action: TypedAction<CreateLinkData>,
+) -> ExternResult<ValidateCallbackResult> {
+    let target = target_action_hash(&action)?;
+    let record = must_get_valid_record(target)?;
+    let _batch: BlindBatchCommitment = record
+        .entry()
+        .to_app_option()
+        .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("{e:?}"))))?
+        .ok_or(wasm_error!(WasmErrorInner::Guest(
+            "PathToBlindBatch target must be a BlindBatchCommitment".into()
+        )))?;
+    Ok(ValidateCallbackResult::Valid)
+}
+
+// --- BatchToPurchase : minter's discovery of purchases against their batch,
+// permanent -------------------------------------------------------------
+
+pub fn validate_create_link_batch_to_purchase(
+    action: TypedAction<CreateLinkData>,
+) -> ExternResult<ValidateCallbackResult> {
+    let batch = base_action_hash(&action)?;
+    let purchase_hash = target_action_hash(&action)?;
+    let (_, purchase) = load_purchase_commitment(&purchase_hash)?;
+    if purchase.batch != batch {
+        return Ok(ValidateCallbackResult::Invalid(
+            "BatchToPurchase base does not match the purchase's batch".into(),
         ));
     }
     Ok(ValidateCallbackResult::Valid)

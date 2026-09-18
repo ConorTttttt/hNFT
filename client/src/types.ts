@@ -120,6 +120,13 @@ export interface ListingView {
 // `docs/blind-box-collections.md`. Mirrors the actual Rust structs — field
 // shapes below are confirmed against `blind.rs`, not inferred.
 
+/** The `BlindBatchCommitment` entry as it decodes off the wire (`decodeEntry`). */
+export interface BlindBatchCommitment {
+  batch_size: number;
+  /** 32 bytes, MessagePack array of ints on the wire. */
+  seed_hash: number[];
+}
+
 /** The `BlindPurchaseCommitment` entry as it decodes off the wire (`decodeEntry`). */
 export interface BlindPurchaseCommitment {
   batch: ActionHash;
@@ -189,7 +196,8 @@ export type RemoteSignal =
   | { type: "TransferAccepted"; commitment: ActionHash }
   | { type: "NftRevealed"; nft: ActionHash }
   | { type: "DelegatedReveal"; nft: ActionHash; agreement: ActionHash }
-  | { type: "ListingInterest"; listing: ActionHash; nft: ActionHash; buyer: AgentPubKey };
+  | { type: "ListingInterest"; listing: ActionHash; nft: ActionHash; buyer: AgentPubKey }
+  | { type: "BlindPurchaseReserved"; batch: ActionHash; purchase: ActionHash };
 
 /** Local UI signal emitted from `post_commit` (loosely typed — shape follows the scaffolder's `Signal` enum). */
 export interface LocalSignal {

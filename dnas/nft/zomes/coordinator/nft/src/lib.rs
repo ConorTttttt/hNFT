@@ -123,6 +123,13 @@ pub enum RemoteSignal {
         nft: ActionHash,
         buyer: AgentPubKey,
     },
+    /// Buyer -> minter: "I reserved a blind-box purchase against your
+    /// batch". Best effort; the purchase itself is already durable via
+    /// `BatchToPurchase`.
+    BlindPurchaseReserved {
+        batch: ActionHash,
+        purchase: ActionHash,
+    },
 }
 
 #[hdk_extern]

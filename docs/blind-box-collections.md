@@ -80,11 +80,34 @@ buyer's ephemeral sender pubkey in `BlindPurchaseCommitment.encrypted_nonce`
 (opaque to `validate()` — only length-bounded there). `resolve_blind_assignment_from_rave`
 decrypts it with the matching secret held in the minter's own lair keystore.
 
-## UI (`ui/src/components/MintBlindBatchDialog.svelte`, `ReserveBlindPurchaseDialog.svelte`, `ResolveBlindAssignmentDialog.svelte`)
+## Batch/purchase discovery
+
+Neither a batch nor a purchase against it was discoverable by anything
+other than an out-of-band-shared `ActionHash` in the first pass of this
+design — no `PathToNft`-equivalent existed for `BlindBatchCommitment`, and
+the minter had no way to see purchases reserved against their own batch.
+Two new permanent link types close this, mirroring existing patterns
+exactly:
+
+- `PathToBlindBatch` (`Path("collection.all")` -> batch) — global batch
+  discovery, same role as `PathToNft`. Created by `mint_blind_batch`,
+  read by `get_all_blind_batches`.
+- `BatchToPurchase` (batch -> purchase) — the minter's resolution queue,
+  same role as `NftToListing`. Created by `reserve_blind_purchase` (which
+  also sends a best-effort `BlindPurchaseReserved` remote signal to the
+  minter, mirroring `ListingInterest`), read by `purchases_for_batch`.
+- `resolved_purchases_for_batch` — an own-chain scan (same technique as
+  `taken_slots_for_batch`) so a UI can filter already-resolved purchases
+  out of the minter's queue instead of leaving them there forever.
+
+## UI (`ui/src/components/MintBlindBatchDialog.svelte`, `ReserveBlindPurchaseDialog.svelte`, `ResolveBlindAssignmentDialog.svelte`, `BlindBoxesView.svelte`)
 
 Follows the existing patterns exactly: `NftClient` methods in
 `client/src/client.ts`, action-wrapper methods on `AppState`
-(`ui/src/lib/appState.svelte.ts`), `<dialog>` components. The
+(`ui/src/lib/appState.svelte.ts`), `<dialog>` components. `BlindBoxesView.svelte`
+is a new top-level nav tab ("Blind boxes") listing every discoverable
+batch, the calling agent's own batches, and — for a minter — their
+resolution queue, wired to the three dialogs above. The
 `generate_minter_x25519_pubkey` bootstrap step lives in
 `ui/src/setup/GenerateMinterKey.svelte`, deliberately outside the main
 app's routing — it's a one-time, pre-DNA-creation step, not a runtime
@@ -107,7 +130,9 @@ too rather than inventing a second storage mechanism.
 ## Known test gaps
 
 `coordinator/nft/tests/blind.rs` covers the happy path, duplicate-purchase
-rejection, and batch-exhaustion rejection. It does **not** cover the two
+rejection, batch-exhaustion rejection, and batch/purchase discovery
+(`get_all_blind_batches`, `purchases_for_batch`, `resolved_purchases_for_batch`).
+It does **not** cover the two
 adversarial cases `blind_collection.rs`'s own test-priority notes call for
 (colluding minter+buyer pre-purchase prediction; minter post-nonce
 withholding) — both need a way to author a raw, off-protocol entry bypassing
