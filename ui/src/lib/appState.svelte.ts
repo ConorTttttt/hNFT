@@ -1189,10 +1189,20 @@ export class AppState {
    * NOT persisted here — the caller (dialog) owns storing it, since there
    * is no on-chain way to recover it and it's needed again for every
    * future `resolveBlindAssignment` call against this batch.
+   *
+   * `group`, when given, adds every minted NFT to a social Collection (the
+   * "Collections" feature — a separate, curated grouping from this DNA
+   * cell's own single collection every NFT here already belongs to) so
+   * the whole batch browses together there. Pass `{ name, description }`
+   * to create a new Collection for this batch, or `{ collection }` to add
+   * to one that already exists. A failure here doesn't undo the mint —
+   * the batch is already real either way — it's reported as a separate
+   * toast.
    */
   async mintBlindBatch(
     commitments: Commitment[],
     mintSeed: Uint8Array,
+    group?: { name: string; description: string } | { collection: ActionHash },
   ): Promise<MintBlindBatchOutput | null> {
     try {
       const result = await this.nft.mintBlindBatch(
@@ -1201,6 +1211,24 @@ export class AppState {
       );
       const pairs = result.nfts.map((nft, i) => [nft, commitments[i]!] as const);
       await Promise.all(pairs.map(([nft, c]) => saveCommitment(nft, c)));
+
+      if (group) {
+        try {
+          const collection =
+            "collection" in group
+              ? group.collection
+              : recordActionHash(await this.social.createCollection(group));
+          await Promise.all(
+            result.nfts.map((nft) =>
+              this.social.addToCollection({ collection, target: nft, targetRole: NFT_ROLE }),
+            ),
+          );
+          await this.loadMyCollections();
+        } catch (e) {
+          toast.error(`Minted, but grouping into a collection failed: ${errText(e)}`);
+        }
+      }
+
       toast.success(`Minted a blind batch of ${result.nfts.length}`);
       this.log("info", `Minted blind batch ${shortHash(result.batch)}`);
       await Promise.all([this.loadMyNfts(), this.loadDrafts()]);

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { prepareCommitment, type NftAttribute } from "@p2p-art-marketplace/client";
   import { useAppState } from "$lib/appState.svelte";
-  import { toHex } from "$lib/format";
+  import { b64, toHex, unb64 } from "$lib/format";
 
   let { open = $bindable(false) }: { open: boolean } = $props();
 
@@ -29,6 +29,15 @@
   let namePrefix = $state("Mystery Item");
   let imageUriTemplate = $state(""); // "{i}" is replaced with the 0-based slot index
 
+  // Group the batch into a social Collection (the "Collections" tab — a
+  // separate, curated grouping from the DNA cell every NFT already
+  // belongs to) so buyers browse the whole batch together there.
+  let groupIntoCollection = $state(true);
+  let collectionMode = $state<"new" | "existing">("new");
+  let newCollectionName = $state("");
+  let newCollectionDescription = $state("");
+  let existingCollectionHash = $state("");
+
   function randomSalt(): Uint8Array {
     const salt = new Uint8Array(32);
     crypto.getRandomValues(salt);
@@ -54,7 +63,16 @@
       });
       const mintSeed = randomSeed();
 
-      const result = await app.mintBlindBatch(commitments, mintSeed);
+      const group = !groupIntoCollection
+        ? undefined
+        : collectionMode === "existing" && existingCollectionHash
+          ? { collection: unb64(existingCollectionHash) }
+          : {
+              name: newCollectionName.trim() || namePrefix.trim() || "Blind batch",
+              description: newCollectionDescription.trim(),
+            };
+
+      const result = await app.mintBlindBatch(commitments, mintSeed, group);
       if (result) {
         // No on-chain way to recover mint_seed — the minter's own client
         // must hold onto it, keyed by batch hash, until every purchase
@@ -96,6 +114,71 @@
         disabled={busy}
       />
     </label>
+
+    <label class="row" style="gap: 0.5rem">
+      <input
+        type="checkbox"
+        bind:checked={groupIntoCollection}
+        style="width: auto"
+        disabled={busy}
+      />
+      <span class="small">Group this batch into a Collection</span>
+    </label>
+
+    {#if groupIntoCollection}
+      <div class="stack tight" style="padding-left: 1.5rem">
+        {#if app.myCollections.length}
+          <label class="row" style="gap: 0.4rem">
+            <input
+              type="radio"
+              name="collection-mode"
+              value="new"
+              bind:group={collectionMode}
+              style="width: auto"
+              disabled={busy}
+            />
+            <span class="small">New collection</span>
+          </label>
+        {/if}
+
+        {#if collectionMode === "new" || !app.myCollections.length}
+          <label class="field">
+            <span>Collection name</span>
+            <input
+              bind:value={newCollectionName}
+              placeholder={namePrefix.trim() || "Blind batch"}
+              disabled={busy}
+            />
+          </label>
+          <label class="field">
+            <span>Description (optional)</span>
+            <input bind:value={newCollectionDescription} disabled={busy} />
+          </label>
+        {/if}
+
+        {#if app.myCollections.length}
+          <label class="row" style="gap: 0.4rem">
+            <input
+              type="radio"
+              name="collection-mode"
+              value="existing"
+              bind:group={collectionMode}
+              style="width: auto"
+              disabled={busy}
+            />
+            <span class="small">Add to an existing collection</span>
+          </label>
+          {#if collectionMode === "existing"}
+            <select bind:value={existingCollectionHash} disabled={busy}>
+              <option value="">Choose one…</option>
+              {#each app.myCollections as c (b64(c.collection))}
+                <option value={b64(c.collection)}>{c.name}</option>
+              {/each}
+            </select>
+          {/if}
+        {/if}
+      </div>
+    {/if}
 
     <p class="small faint">
       Every slot's salt is generated now and saved to this browser, same as

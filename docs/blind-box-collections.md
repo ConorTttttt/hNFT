@@ -100,6 +100,18 @@ exactly:
   `taken_slots_for_batch`) so a UI can filter already-resolved purchases
   out of the minter's queue instead of leaving them there forever.
 
+## Grouping a batch into a Collection
+
+`MintBlindBatchDialog` can optionally add every minted NFT to a social
+Collection (the "Collections" tab — `SocialClient`'s `createCollection`/
+`addToCollection`) — a separate, curated grouping from the single DNA-cell
+collection every NFT here already belongs to by construction (every item
+in one `mint_blind_batch` call already shares one cell and one `batch`
+hash; that grouping needs no extra code). `AppState.mintBlindBatch`'s
+`group` argument either creates a new Collection for the batch or adds to
+an existing one; a failure here is reported as its own toast and doesn't
+undo the mint, since the batch is already real either way.
+
 ## UI (`ui/src/components/MintBlindBatchDialog.svelte`, `ReserveBlindPurchaseDialog.svelte`, `ResolveBlindAssignmentDialog.svelte`, `BlindBoxesView.svelte`)
 
 Follows the existing patterns exactly: `NftClient` methods in
