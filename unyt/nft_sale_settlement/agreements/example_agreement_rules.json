@@ -1,0 +1,20 @@
+{
+  "title": "Example: NFT sale settlement (documentation only, not instantiated)",
+  "input_rules": [
+    { "name": "buyer_spends", "instruction": { "ProvidedBy": "buyer_spender" } },
+    { "name": "seller", "instruction": { "Fixed": "REPLACE_WITH_SELLER_AGENT_PUBKEY" } },
+    { "name": "price", "instruction": { "Fixed": { "0": "10" } } },
+    { "name": "nft_id", "instruction": { "Fixed": "REPLACE_WITH_NFT_ACTION_HASH" } }
+  ],
+  "executor_rules": { "Any": null },
+  "roles": [
+    {
+      "ct_role_id": "buyer_spender",
+      "display_name": "Buyer",
+      "description": "Pays the agreed price from parked spends",
+      "qualification": { "Any": null }
+    }
+  ],
+  "tags": [{ "Public": "nft-sale" }],
+  "permissions": { "Default": null }
+}

@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "unyt_allocation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "receiver": { "type": "string" },
+          "amounts": { "type": "object", "additionalProperties": { "type": "string" } },
+          "sources": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["receiver", "amounts", "sources"]
+      }
+    },
+    "computed_values": {
+      "type": "object",
+      "properties": {
+        "nft_id": { "type": "string" },
+        "price": { "type": "number" }
+      },
+      "required": ["nft_id", "price"]
+    }
+  },
+  "required": ["unyt_allocation", "computed_values"]
+}

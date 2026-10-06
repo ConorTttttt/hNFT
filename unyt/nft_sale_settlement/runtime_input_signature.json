@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "properties": {
+    "consumed_inputs": {
+      "type": "object",
+      "properties": {
+        "buyer_spends": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "amount": { "type": "object", "additionalProperties": { "type": "string" } },
+              "source": { "type": "string" }
+            },
+            "required": ["amount", "source"]
+          }
+        }
+      },
+      "required": ["buyer_spends"]
+    },
+    "inputs": {
+      "type": "object",
+      "properties": {
+        "seller": { "type": "string" },
+        "price": { "type": "object", "additionalProperties": { "type": "string" } },
+        "nft_id": { "type": "string" }
+      },
+      "required": ["seller", "price", "nft_id"]
+    }
+  },
+  "required": ["consumed_inputs", "inputs"]
+}
