@@ -1,3 +1,6 @@
+// Shared by several test crates; each uses only a subset of these helpers.
+#![allow(dead_code)]
+
 use holochain::prelude::*;
 use holochain::sweettest::*;
 use nft_integrity::*;
@@ -19,26 +22,51 @@ pub fn dev_props(
         royalty_bps: 0,
         transfer_window_secs,
         blind_resolution_window_secs: 0,
-        minter_x25519_pubkey: None,
+        collection_id: None,
+        randomness: None,
+        generation: None,
+        whitelist: None,
     }
 }
 
-/// Same as [`dev_props`], plus the fields blind-box sales need:
-/// `blind_resolution_window_secs` and the minter's own `minter_x25519_pubkey`
-/// (hex-encoded, from `generate_minter_x25519_pubkey`).
-pub fn dev_props_blind(
-    minter: Option<AgentPubKey>,
+/// A collection with WHITELIST mint mode: only `entries`' agents may mint,
+/// each capped at their own allowance. `minter_pubkey` is left `None` — it is
+/// ignored once `whitelist` is non-empty (see `CollectionProperties::mint_mode`).
+pub fn whitelist_props(
+    entries: Vec<(AgentPubKey, u32)>,
     max_supply: u32,
     transfer_window_secs: u64,
-    blind_resolution_window_secs: u64,
-    minter_x25519_pubkey: String,
 ) -> CollectionProperties {
     CollectionProperties {
-        blind_resolution_window_secs,
-        minter_x25519_pubkey: Some(minter_x25519_pubkey),
-        ..dev_props(minter, max_supply, transfer_window_secs)
+        whitelist: Some(
+            entries
+                .into_iter()
+                .map(|(agent, allowance)| WhitelistEntry {
+                    agent: agent.to_string(),
+                    allowance,
+                })
+                .collect(),
+        ),
+        ..dev_props(None, max_supply, transfer_window_secs)
     }
 }
+
+/// A collection configured for G3a blind batches: an explicit `collection_id`
+/// and the INSECURE dev randomness verifier. Open minting (any agent may mint);
+/// batch ownership is enforced by the batch-author checks, not the minter key.
+pub fn blind_props(transfer_window_secs: u64) -> CollectionProperties {
+    CollectionProperties {
+        collection_id: Some("c0".repeat(32)),
+        randomness: Some(RandomnessSpec {
+            provider_id: INSECURE_DEV_PROVIDER_ID.into(),
+            verifier_params: String::new(),
+        }),
+        ..dev_props(None, 0, transfer_window_secs)
+    }
+}
+
+/// The decoded `collection_id` used by `blind_props` (32 bytes of 0xC0).
+pub const BLIND_COLLECTION_ID: [u8; 32] = [0xC0; 32];
 
 /// Load the packed DNA, optionally overriding `modifiers.properties`.
 pub async fn dna(props: Option<CollectionProperties>) -> DnaFile {

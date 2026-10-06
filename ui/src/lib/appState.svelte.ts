@@ -1,3 +1,4 @@
+import { CellType } from "@holochain/client";
 import type {
   ActionHash,
   AgentPubKey,
@@ -8,20 +9,35 @@ import type {
 import {
   NftClient,
   SocialClient,
+  createNftCollection as createNftCollectionCell,
   decodeEntry,
   decodeNftManifest,
+  discoverNetworkMarketplace,
+  discoverNetworkNfts,
+  mintPolicyOf,
+  openDiscoveredCollection,
+  parseDiscoveredCollections,
+  publishNftCollectionForDiscovery,
   recordActionHash,
+  type DiscoveredCollectionCard,
+  type NetworkMarketplaceItem,
+  type NetworkNftReference,
+  type NftCollectionDiscoveryView,
   type AgreementView,
   type BlindBatchCommitment,
-  type BlindPurchaseCommitment,
   type CollectionInfo,
   type CollectionItemView,
   type Commitment,
+  type CreateNftCollectionInput,
+  type CreatedNftCollection,
   type DecodedNftManifest,
   type DelegatedRevealView,
   type ListingView,
   type LocalSignal,
+  type AssignmentView,
+  type BatchState,
   type MintBlindBatchOutput,
+  type MintStatus,
   type NftAttribute,
   type ProvenanceHop,
   type RemoteSignal,
@@ -29,6 +45,8 @@ import {
   type TransferCommitment,
 } from "@p2p-art-marketplace/client";
 import { b64, eqHash, nftTitle, shortHash, tsToMs, unb64 } from "./format";
+import { collectionKind } from "./collectionCards";
+import { registerCollection } from "./collectionRegistry";
 import { toast } from "./toast.svelte";
 import {
   hasCommitment,
@@ -115,9 +133,14 @@ export interface BlindBatchView {
   batchSize: number;
   minter: AgentPubKey;
   mintedAtMs: number;
+  /** DRAFT / SALES_OPEN / CLOSED / RANDOMNESS_FIXED (derived from the chain). */
+  state: BatchState;
+  inventory: ActionHash | null;
+  close: ActionHash | null;
+  result: ActionHash | null;
 }
 
-/** A purchase awaiting resolution against one of this agent's own batches. */
+/** A purchase against one of this agent's own batches that is still in an open sale. */
 export interface BlindPurchaseRow {
   purchase: ActionHash;
   batch: ActionHash;
@@ -193,12 +216,270 @@ export class AppState {
   readonly social: SocialClient;
   readonly me: AgentPubKey;
   private readonly client: AppWebsocket;
+  /** This instance's own `nft` cell — the provisioned role, or a clone id
+   * (e.g. `"nft.0"`) when bound to a runtime-created collection. Social
+   * collection items authored here must name THIS role as their `target_role`,
+   * not the hardcoded default, so cross-collection social links resolve. */
+  readonly nftRoleName: string;
 
   collection = $state<CollectionInfo | null>(null);
   isMinter = $state(false);
+  /** Full authoritative mint eligibility/policy/allowance picture (Phase
+   * J.2) — `isMinter` above is exactly `mintStatus?.eligible`, kept as its
+   * own field since most callers only need the boolean. */
+  mintStatus = $state<MintStatus | null>(null);
+
+  // --- Phase J.3: network-wide NFT-collection discovery -------------------
+  // Cross-collection state (not per-active-collection), same category as
+  // `createNftCollection` below — uses `this.social` (the one global cell)
+  // and `this.client` (for local clone-cell/`appInfo` lookups), not `this.nft`.
+
+  discoveredCollections = $state<NftCollectionDiscoveryView[]>([]);
+  discoveredLoading = $state(false);
+  discoveredLoaded = $state(false);
+  /** `clone_id -> base64 DnaHash`, for every `nft` clone THIS device has
+   * installed — resolved live from `appInfo()`, never remembered separately.
+   * Used to tell "discovered AND locally installed" apart from "discovered
+   * only" without needing a schema change to `collectionRegistry.ts`. */
+  private localDnaHashByCloneId = $state<Map<string, string>>(new Map());
+
+  /** `local dna hash lookup, keyed by clone id` — public read for card-building. */
+  get localCloneDnaHashes(): ReadonlyMap<string, string> {
+    return this.localDnaHashByCloneId;
+  }
+
+  /** Loads (or reloads) the network-wide discovery list plus this device's
+   * own installed-clone DnaHashes, in one pass. Cheap: one `social` query +
+   * one `appInfo()` call, neither of which scans any `nft` clone's own DHT. */
+  async loadDiscoveredCollections(): Promise<void> {
+    this.discoveredLoading = true;
+    try {
+      const [views, info] = await Promise.all([
+        this.social.discoverNftCollections(),
+        this.client.appInfo(),
+      ]);
+      this.discoveredCollections = views;
+      const byClone = new Map<string, string>();
+      for (const cellInfo of info?.cell_info[NFT_ROLE] ?? []) {
+        if (cellInfo.type === CellType.Cloned) {
+          byClone.set(cellInfo.value.clone_id, b64(cellInfo.value.cell_id[0]));
+        }
+      }
+      this.localDnaHashByCloneId = byClone;
+      this.discoveredLoaded = true;
+    } catch (e) {
+      toast.error(`Failed to load network collections: ${errText(e)}`);
+    } finally {
+      this.discoveredLoading = false;
+    }
+  }
+
+  /** Publish the CURRENTLY ACTIVE collection for network-wide discovery.
+   * Only meaningful for a runtime-created clone (`this.nftRoleName` is a
+   * clone id) — the provisioned default role is identical on every install
+   * by construction, so there is nothing to "discover" about it. */
+  async publishActiveCollection(): Promise<ActionHash | null> {
+    if (this.nftRoleName === NFT_ROLE) {
+      toast.error("The default collection doesn't need publishing — every install already has it.");
+      return null;
+    }
+    try {
+      const hash = await publishNftCollectionForDiscovery(this.client, this.social, this.nftRoleName);
+      toast.success("Published to the network — other peers can now discover this collection");
+      await this.loadDiscoveredCollections();
+      return hash;
+    } catch (e) {
+      toast.error(`Failed to publish collection: ${errText(e)}`);
+      return null;
+    }
+  }
+
+  /** Reconstruct the local clone a discovered collection points to (see
+   * `openDiscoveredCollection`'s doc for the DnaHash verification it does),
+   * then cache it in the local registry — the LOCAL registry is a cache of
+   * "collections this device can open", never the authority on which
+   * collections exist (that's `discoverNftCollections`). */
+  async openDiscovered(card: DiscoveredCollectionCard): Promise<{ cloneId: string } | null> {
+    try {
+      const opened = await openDiscoveredCollection(this.client, card);
+      registerCollection({
+        cloneId: opened.cloneId,
+        name: card.properties.name,
+        collectionId: card.properties.collection_id ?? null,
+        createdAt: Date.now(),
+        symbol: card.properties.symbol,
+        kind: collectionKind(card.properties),
+        maxSupply: card.properties.max_supply,
+        restrictedMinting: card.properties.minter_pubkey !== null,
+        mintPolicy: mintPolicyOf(card.properties),
+      });
+      toast.success(`Opened "${card.properties.name}"`);
+      return { cloneId: opened.cloneId };
+    } catch (e) {
+      toast.error(`Failed to open collection: ${errText(e)}`);
+      return null;
+    }
+  }
+
+  /** Parsed, display-ready view of `discoveredCollections` — malformed
+   * entries are dropped, never thrown (see `parseDiscoveredCollections`). */
+  get discoveredCards(): DiscoveredCollectionCard[] {
+    return parseDiscoveredCollections(this.discoveredCollections);
+  }
+
+  // --- Phase J.4: network-wide NFT discovery -------------------------------
+  // A bounded, on-demand PREVIEW across discovered collections — not a
+  // finished cross-collection Items feed (see `discoverNetworkNfts`'s doc).
+  // Composed entirely from `discoveredCards` (J.3) + each collection's own,
+  // unmodified `get_all_nfts` — no new protocol underneath this.
+
+  networkNftReferences = $state<NetworkNftReference[]>([]);
+  networkNftsLoading = $state(false);
+  networkNftsLoaded = $state(false);
+  /** Discovered collections this pass could not resolve (clone failed to
+   * open, or its `get_all_nfts` call failed) — surfaced so the UI can show
+   * "unable to resolve" rather than silently omitting them. */
+  networkNftsUnresolved = $state<DiscoveredCollectionCard[]>([]);
+
+  /** Bounded preview: resolves NFTs from up to a handful of discovered
+   * collections not already local. Opens any needed clones and folds them
+   * into the local registry cache (never a hidden, untracked install). */
+  async loadNetworkNfts(): Promise<void> {
+    this.networkNftsLoading = true;
+    try {
+      const already = new Map<string, string>();
+      for (const [cloneId, dnaHashB64] of this.localDnaHashByCloneId) {
+        already.set(dnaHashB64, cloneId);
+      }
+      const result = await discoverNetworkNfts(this.client, this.discoveredCards, already);
+      this.networkNftReferences = result.references;
+      this.networkNftsUnresolved = result.unresolvedCollections;
+      for (const { cloneId, card } of result.openedCollections) {
+        registerCollection({
+          cloneId,
+          name: card.properties.name,
+          collectionId: card.properties.collection_id ?? null,
+          createdAt: Date.now(),
+          symbol: card.properties.symbol,
+          kind: collectionKind(card.properties),
+          maxSupply: card.properties.max_supply,
+          restrictedMinting: card.properties.minter_pubkey !== null,
+          mintPolicy: mintPolicyOf(card.properties),
+        });
+      }
+      if (result.openedCollections.length) await this.loadDiscoveredCollections();
+      this.networkNftsLoaded = true;
+    } catch (e) {
+      toast.error(`Failed to load network items: ${errText(e)}`);
+    } finally {
+      this.networkNftsLoading = false;
+    }
+  }
+
+  // --- Phase J.5: Network Marketplace ---------------------------------------
+  // Built strictly on top of J.4's `discoverNetworkNfts` (via
+  // `discoverNetworkMarketplace`, which adds only one more authoritative call
+  // per resolved collection: its own `all_listings()`). Still no new DHT
+  // entry type, no global index, no durable network cache — this state is
+  // rebuilt from scratch on every "Refresh", and "Load more" only ever
+  // queries collections not already folded in this session.
+
+  static readonly DEFAULT_MARKETPLACE_MAX_COLLECTIONS = 6;
+  static readonly DEFAULT_MARKETPLACE_MAX_NFTS_PER_COLLECTION = 24;
+
+  networkMarketplaceItems = $state<NetworkMarketplaceItem[]>([]);
+  networkMarketplaceLoading = $state(false);
+  networkMarketplaceLoaded = $state(false);
+  /** Discovered collections this session could not resolve into the
+   * marketplace (clone failed to open, or its queries failed) — surfaced,
+   * never silently dropped. */
+  networkMarketplaceUnresolved = $state<DiscoveredCollectionCard[]>([]);
+  /** Base64 dna_hash of every collection already folded into
+   * `networkMarketplaceItems`/`networkMarketplaceUnresolved` this session —
+   * what "Load more collections" uses to avoid re-querying the same ones. */
+  private networkMarketplaceSeenDnaHashes = $state<Set<string>>(new Set());
+
+  /** `true` once more discovered collections exist than this session has
+   * attempted to resolve — i.e. "Load more collections" would do something. */
+  get networkMarketplaceMoreAvailable(): boolean {
+    return this.discoveredCards.some(
+      (c) => !this.networkMarketplaceSeenDnaHashes.has(b64(c.dnaHash)),
+    );
+  }
+
+  get networkMarketplaceLoadedCollectionCount(): number {
+    return new Set(this.networkMarketplaceItems.map((i) => i.collectionDnaHashB64)).size;
+  }
+
+  /**
+   * Loads (or extends) the Network Marketplace.
+   * `more: true` only queries collections not yet seen this session and
+   * APPENDS to the existing items — "Load more collections" (§10). Anything
+   * else is a full "Refresh": the item/unresolved/seen state is reset first,
+   * so no stale listing/ownership state can survive a refresh (§20/§23).
+   */
+  async loadNetworkMarketplace(
+    opts: { more?: boolean; maxCollections?: number; maxNftsPerCollection?: number } = {},
+  ): Promise<void> {
+    this.networkMarketplaceLoading = true;
+    try {
+      const already = new Map<string, string>();
+      for (const [cloneId, dnaHashB64] of this.localDnaHashByCloneId) {
+        already.set(dnaHashB64, cloneId);
+      }
+
+      if (!opts.more) {
+        this.networkMarketplaceItems = [];
+        this.networkMarketplaceUnresolved = [];
+        this.networkMarketplaceSeenDnaHashes = new Set();
+      }
+
+      const pending = this.discoveredCards.filter(
+        (c) => !this.networkMarketplaceSeenDnaHashes.has(b64(c.dnaHash)),
+      );
+
+      const result = await discoverNetworkMarketplace(this.client, pending, already, {
+        maxCollections: opts.maxCollections ?? AppState.DEFAULT_MARKETPLACE_MAX_COLLECTIONS,
+        maxNftsPerCollection:
+          opts.maxNftsPerCollection ?? AppState.DEFAULT_MARKETPLACE_MAX_NFTS_PER_COLLECTION,
+      });
+
+      this.networkMarketplaceItems = [...this.networkMarketplaceItems, ...result.items];
+      this.networkMarketplaceUnresolved = [
+        ...this.networkMarketplaceUnresolved,
+        ...result.unresolvedCollections,
+      ];
+      const seen = new Set(this.networkMarketplaceSeenDnaHashes);
+      for (const item of result.items) seen.add(item.collectionDnaHashB64);
+      for (const c of result.unresolvedCollections) seen.add(b64(c.dnaHash));
+      this.networkMarketplaceSeenDnaHashes = seen;
+
+      for (const { cloneId, card } of result.openedCollections) {
+        registerCollection({
+          cloneId,
+          name: card.properties.name,
+          collectionId: card.properties.collection_id ?? null,
+          createdAt: Date.now(),
+          symbol: card.properties.symbol,
+          kind: collectionKind(card.properties),
+          maxSupply: card.properties.max_supply,
+          restrictedMinting: card.properties.minter_pubkey !== null,
+          mintPolicy: mintPolicyOf(card.properties),
+        });
+      }
+      if (result.openedCollections.length) await this.loadDiscoveredCollections();
+      this.networkMarketplaceLoaded = true;
+    } catch (e) {
+      toast.error(`Failed to load network marketplace: ${errText(e)}`);
+    } finally {
+      this.networkMarketplaceLoading = false;
+    }
+  }
 
   /** Which top-level view is showing; owned here so signals can navigate. */
-  view = $state<"collection" | "discover" | "collections" | "activity" | "blind">("collection");
+  view = $state<"overview" | "collection" | "discover" | "collections" | "activity" | "blind">(
+    "overview",
+  );
   /** Commitment to flash in the offers list (set from a "new offer" toast). */
   highlightOffer = $state<ActionHash | null>(null);
 
@@ -207,7 +488,16 @@ export class AppState {
   /** Every NFT in the collection, for the Discover view. Loaded lazily. */
   discover = $state<NftView[]>([]);
   discoverLoading = $state(false);
-  private discoverLoaded = false;
+  /** Has `loadDiscover()` completed at least once for this collection? Lets
+   * the UI tell "not loaded yet" apart from "loaded, zero items". */
+  discoverLoaded = $state(false);
+  /** Every active listing in this collection (`allListings()`), fetched once
+   * and shared by the Overview, Items grid and NFT cards. */
+  listings = $state<ListingView[]>([]);
+  listingsLoading = $state(false);
+  listingsLoaded = $state(false);
+  /** `listings` keyed by b64 NFT hash, for per-card lookups without a query per card. */
+  listingByNft = $derived(new Map(this.listings.map((l) => [b64(l.nft), l] as const)));
   private blindBatchesLoaded = false;
   /** NFTs this device minted that are still sealed — revealable regardless of ownership. */
   drafts = $state<DraftView[]>([]);
@@ -257,6 +547,7 @@ export class AppState {
   private readonly refreshInbox = new Debounced(() => void this.loadInbox());
   private readonly refreshDiscover = new Debounced(() => {
     if (this.discoverLoaded) void this.loadDiscover();
+    if (this.listingsLoaded) void this.loadListings();
   });
   private readonly refreshDetail = new Debounced(() => {
     if (this.detailNft) void this.loadDetail(this.detailNft);
@@ -267,6 +558,7 @@ export class AppState {
 
   constructor(client: AppWebsocket, me: AgentPubKey, roleName?: string) {
     this.client = client;
+    this.nftRoleName = roleName ?? NFT_ROLE;
     this.nft = new NftClient({ client, roleName });
     this.social = new SocialClient({ client }); // global cell — no roleName override
     this.me = me;
@@ -276,12 +568,13 @@ export class AppState {
 
   async init(): Promise<void> {
     try {
-      const [info, minter] = await Promise.all([
+      const [info, status] = await Promise.all([
         this.nft.collectionInfo(),
-        this.nft.isMinter(),
+        this.nft.mintStatus(),
       ]);
       this.collection = info;
-      this.isMinter = minter;
+      this.mintStatus = status;
+      this.isMinter = status.eligible;
     } catch (e) {
       this.error = String(e);
     }
@@ -607,10 +900,43 @@ export class AppState {
     }
   }
 
-  /** Switch to the Discover view, loading its contents the first time. */
+  /** Switch to the Items view, loading its contents the first time. */
   async openDiscover(): Promise<void> {
     this.view = "discover";
-    if (!this.discoverLoaded) await this.loadDiscover();
+    await this.ensureMarketData();
+  }
+
+  /** Switch to the collection Overview, loading its statistics the first time. */
+  async openOverview(): Promise<void> {
+    this.view = "overview";
+    await this.ensureMarketData();
+  }
+
+  /**
+   * Load the collection-wide NFT set (`getAllNfts`) and listing set
+   * (`allListings`) once, without changing the current view. Both are full
+   * scans of this one collection — there are no dedicated count externs and
+   * no pagination — so they're loaded once per `AppState` and then refreshed
+   * only by signals.
+   */
+  async ensureMarketData(): Promise<void> {
+    await Promise.all([
+      this.discoverLoaded || this.discoverLoading ? Promise.resolve() : this.loadDiscover(),
+      this.listingsLoaded || this.listingsLoading ? Promise.resolve() : this.loadListings(),
+    ]);
+  }
+
+  /** Every active listing in the collection — the authoritative for-sale set. */
+  async loadListings(): Promise<void> {
+    this.listingsLoading = true;
+    try {
+      this.listings = await this.nft.allListings();
+      this.listingsLoaded = true;
+    } catch (e) {
+      this.error = String(e);
+    } finally {
+      this.listingsLoading = false;
+    }
   }
 
   /** Every NFT ever minted in the collection — not just this agent's own. */
@@ -661,16 +987,24 @@ export class AppState {
     this.blindBatchesLoading = true;
     try {
       const records = await this.nft.getAllBlindBatches();
-      this.blindBatches = records.map((r) => {
-        const entry = decodeEntry<BlindBatchCommitment>(r);
-        const header = r.signed_action.hashed.content.header;
-        return {
-          batch: recordActionHash(r),
-          batchSize: entry.batch_size,
-          minter: header.author,
-          mintedAtMs: tsToMs(header.timestamp),
-        } satisfies BlindBatchView;
-      });
+      this.blindBatches = await Promise.all(
+        records.map(async (r) => {
+          const entry = decodeEntry<BlindBatchCommitment>(r);
+          const header = r.signed_action.hashed.content.header;
+          const batch = recordActionHash(r);
+          const st = await this.nft.getBatchState(batch).catch(() => null);
+          return {
+            batch,
+            batchSize: entry.batch_size,
+            minter: header.author,
+            mintedAtMs: tsToMs(header.timestamp),
+            state: st?.state ?? "DRAFT",
+            inventory: st?.inventory ?? null,
+            close: st?.close ?? null,
+            result: st?.result ?? null,
+          } satisfies BlindBatchView;
+        }),
+      );
       this.blindBatchesLoaded = true;
       await this.loadMyBatchPurchases();
       this.error = null;
@@ -681,30 +1015,25 @@ export class AppState {
     }
   }
 
-  /** Purchases awaiting resolution against batches THIS agent minted —
-   * the minter's own resolution queue. Depends on `blindBatches` already
-   * being loaded (to know which batches are "mine"). */
+  /** Purchases against batches THIS agent minted that are still in an open sale
+   * (the minter's input to closing). Needs `blindBatches` loaded first. */
   async loadMyBatchPurchases(): Promise<void> {
     try {
-      const myBatches = this.blindBatches.filter((b) => eqHash(b.minter, this.me));
+      const myOpen = this.blindBatches.filter(
+        (b) => eqHash(b.minter, this.me) && b.state === "SALES_OPEN",
+      );
       const rows = await Promise.all(
-        myBatches.map(async (b) => {
-          const [purchaseRecords, resolved] = await Promise.all([
-            this.nft.purchasesForBatch(b.batch).catch(() => []),
-            this.nft.resolvedPurchasesForBatch(b.batch).catch(() => []),
-          ]);
-          const resolvedKeys = new Set(resolved.map((h) => b64(h)));
-          return purchaseRecords
-            .filter((r) => !resolvedKeys.has(b64(recordActionHash(r))))
-            .map((r) => {
-              const header = r.signed_action.hashed.content.header;
-              return {
-                purchase: recordActionHash(r),
-                batch: b.batch,
-                buyer: header.author,
-                reservedAtMs: tsToMs(header.timestamp),
-              } satisfies BlindPurchaseRow;
-            });
+        myOpen.map(async (b) => {
+          const purchaseRecords = await this.nft.purchasesForBatch(b.batch).catch(() => []);
+          return purchaseRecords.map((r) => {
+            const header = r.signed_action.hashed.content.header;
+            return {
+              purchase: recordActionHash(r),
+              batch: b.batch,
+              buyer: header.author,
+              reservedAtMs: tsToMs(header.timestamp),
+            } satisfies BlindPurchaseRow;
+          });
         }),
       );
       this.myBatchPurchases = rows.flat();
@@ -837,11 +1166,142 @@ export class AppState {
         "success",
         `Minted ${shortHash(out.nft)}${agreement ? " (with reveal agreement)" : " (sealed)"}`,
       );
-      await Promise.all([this.loadMyNfts(), this.loadDrafts()]);
+      await Promise.all([this.loadMyNfts(), this.loadDrafts(), this.refreshMintStatus()]);
       return out.nft;
     } catch (e) {
       toast.error(`Mint failed: ${errText(e)}`);
       throw e;
+    }
+  }
+
+  /** Re-read authoritative mint eligibility/allowance after a mint attempt —
+   * never decremented client-side. Best-effort: a transient failure here
+   * just leaves the previous snapshot displayed a moment longer. */
+  private async refreshMintStatus(): Promise<void> {
+    try {
+      const status = await this.nft.mintStatus();
+      this.mintStatus = status;
+      this.isMinter = status.eligible;
+    } catch {
+      // Leave the previous snapshot in place.
+    }
+  }
+
+  // --- G5b: runtime NFT-collection creation -------------------------------
+  // Via `createCloneCell` — never a generated/exported `dna.yaml`. See
+  // `client/src/collections.ts`. `network_seed` is generated and hidden there;
+  // nothing here ever sees or surfaces it.
+
+  /**
+   * Create a new NFT-collection clone cell and remember it in this device's
+   * local collection registry (NOT a global/on-chain registry — see
+   * `collectionRegistry.ts`). Does not switch to it; the caller decides that
+   * (see `App.svelte`'s collection switcher).
+   */
+  async createNftCollection(input: CreateNftCollectionInput): Promise<CreatedNftCollection | null> {
+    try {
+      const created = await createNftCollectionCell(this.client, input);
+      registerCollection({
+        cloneId: created.cloneId,
+        name: input.name,
+        collectionId: created.collectionId,
+        createdAt: Date.now(),
+        symbol: created.properties.symbol,
+        kind: collectionKind(created.properties),
+        maxSupply: created.properties.max_supply,
+        restrictedMinting: created.properties.minter_pubkey !== null,
+        mintPolicy: mintPolicyOf(created.properties),
+      });
+      toast.success(`Collection "${input.name}" created`);
+      this.log("success", `Created collection "${input.name}" (${created.cloneId})`);
+      return created;
+    } catch (e) {
+      toast.error(`Failed to create collection: ${errText(e)}`);
+      return null;
+    }
+  }
+
+  // --- G5a: generative NFTs ---------------------------------------------
+  // See docs/generative-collections.md. The seed is always DERIVED from
+  // verified randomness — the user never supplies one. `dev-insecure` is the
+  // only provider that exists: forgeable, development/testing only.
+
+  /**
+   * Mint a sealed NFT in a generative collection. There is no per-mint
+   * commitment scheme to build here: the reveal preimage check the ordinary
+   * `mint`/`reveal_nft` path uses does not apply to a generative collection
+   * (see `validate_update_nft_manifest`'s generative branch), so
+   * `metadata_hash` only needs to be a non-zero placeholder.
+   */
+  async mintGenerative(): Promise<ActionHash | null> {
+    try {
+      const placeholder = new Uint8Array(32);
+      crypto.getRandomValues(placeholder);
+      const out = await this.nft.mintNft(placeholder);
+      toast.success("Minted — request randomness to generate its traits");
+      this.log("success", `Minted ${shortHash(out.nft)} (generative, sealed)`);
+      await Promise.all([this.loadMyNfts(), this.refreshMintStatus()]);
+      return out.nft;
+    } catch (e) {
+      toast.error(`Mint failed: ${errText(e)}`);
+      return null;
+    }
+  }
+
+  /**
+   * DEV-INSECURE ONLY: request/record randomness for `nft`. The "proof" is a
+   * public hash anyone can compute — this is NOT secure randomness, only a
+   * way to exercise the protocol. Returns the new `GenerationRandomness`
+   * action hash (needed by `createGenerationRecordFor`), or `null` on failure.
+   */
+  async requestGenerationRandomness(nft: ActionHash): Promise<ActionHash | null> {
+    try {
+      const eventId = crypto.getRandomValues(new Uint8Array(16));
+      const randomness = crypto.getRandomValues(new Uint8Array(32));
+      const proof = await this.nft.devGenerationRandomnessProof(nft, eventId, randomness);
+      const result = await this.nft.createGenerationRandomness(nft, eventId, randomness, proof);
+      toast.success("Randomness recorded (dev-insecure — not production-grade)");
+      this.log("info", `Recorded randomness for ${shortHash(nft)}`);
+      return result;
+    } catch (e) {
+      toast.error(`Failed to record randomness: ${errText(e)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Derive the seed from `result` and record the generated traits. There is
+   * no seed/trait input — the coordinator computes both from the cited
+   * `GenerationRandomness`.
+   */
+  async createGenerationRecordFor(nft: ActionHash, result: ActionHash): Promise<boolean> {
+    try {
+      await this.nft.createGenerationRecord(nft, result);
+      toast.success("Traits generated — ready to reveal");
+      this.log("success", `Generated traits for ${shortHash(nft)}`);
+      return true;
+    } catch (e) {
+      toast.error(`Failed to generate traits: ${errText(e)}`);
+      return false;
+    }
+  }
+
+  /**
+   * Reveal a generative NFT. The attributes come from its `GenerationRecord`
+   * (recomputed and checked by `validate()`); the caller supplies only the
+   * image URI, which is NOT cryptographically bound to the generated traits.
+   */
+  async revealGenerativeNft(nft: ActionHash, imageUri: string): Promise<boolean> {
+    try {
+      const salt = new Uint8Array(32); // unused by the generative reveal path
+      await this.nft.revealGenerated({ nft, previousActionHash: nft, salt, imageUri });
+      toast.success("Revealed");
+      this.log("success", `Revealed ${shortHash(nft)}`);
+      await this.loadMyNfts();
+      return true;
+    } catch (e) {
+      toast.error(`Reveal failed: ${errText(e)}`);
+      return false;
     }
   }
 
@@ -1133,6 +1593,7 @@ export class AppState {
     try {
       await this.nft.createListing(nft, price, currency);
       toast.success("Listed for sale");
+      if (this.listingsLoaded) void this.loadListings();
       this.log("success", `Listed ${shortHash(nft)} for ${price} ${currency}`);
       await Promise.all([this.loadMyListings(), this.loadDetail(nft)]);
     } catch (e) {
@@ -1150,6 +1611,7 @@ export class AppState {
     try {
       await this.nft.updateListingPrice(previousActionHash, price, currency);
       toast.success("Listing updated");
+      if (this.listingsLoaded) void this.loadListings();
       await Promise.all([this.loadMyListings(), nft ? this.loadDetail(nft) : Promise.resolve()]);
     } catch (e) {
       toast.error(`Update failed: ${errText(e)}`);
@@ -1161,6 +1623,7 @@ export class AppState {
     try {
       await this.nft.cancelListing(listing);
       toast.info("Listing cancelled");
+      if (this.listingsLoaded) void this.loadListings();
       await Promise.all([this.loadMyListings(), nft ? this.loadDetail(nft) : Promise.resolve()]);
     } catch (e) {
       toast.error(`Cancel failed: ${errText(e)}`);
@@ -1177,38 +1640,28 @@ export class AppState {
     }
   }
 
-  // --- blind-box collections ---------------------------------------------
-  // See docs/blind-box-collections.md and `blind.rs`. Same demo trust model
-  // as settleFromRave: resolveBlindAssignment does not talk to Unyt either.
+  // --- blind fixed-inventory batches (G3a) ----------------------------------
+  // See docs/blind-box-collections.md and `blind.rs`. No payment coupling, and
+  // the randomness verifier is DEV-ONLY and INSECURE.
+
+  /** Default UI batch-size cap (the protocol maximum is 1024). */
+  static readonly MAX_UI_BATCH_SIZE = 256;
 
   /**
-   * Mint a blind-box batch. `commitments[i]` is slot `i`'s reveal
-   * commitment (build each with `prepareCommitment`, same as an ordinary
-   * mint). Saves each slot's commitment against its minted NFT hash, same
-   * as `mint()` does, so the minter can reveal them later. `mintSeed` is
-   * NOT persisted here — the caller (dialog) owns storing it, since there
-   * is no on-chain way to recover it and it's needed again for every
-   * future `resolveBlindAssignment` call against this batch.
+   * Create a batch, mint its sealed NFTs and finalize the inventory.
+   * `commitments[i]` is slot `i`'s reveal commitment (build each with
+   * `prepareCommitment`). Saves each slot's commitment against its minted NFT,
+   * same as `mint()`, so the minter can reveal later.
    *
-   * `group`, when given, adds every minted NFT to a social Collection (the
-   * "Collections" feature — a separate, curated grouping from this DNA
-   * cell's own single collection every NFT here already belongs to) so
-   * the whole batch browses together there. Pass `{ name, description }`
-   * to create a new Collection for this batch, or `{ collection }` to add
-   * to one that already exists. A failure here doesn't undo the mint —
-   * the batch is already real either way — it's reported as a separate
-   * toast.
+   * `group`, when given, adds every minted NFT to a social Collection. A
+   * failure there doesn't undo the mint; it's reported as a separate toast.
    */
   async mintBlindBatch(
     commitments: Commitment[],
-    mintSeed: Uint8Array,
     group?: { name: string; description: string } | { collection: ActionHash },
   ): Promise<MintBlindBatchOutput | null> {
     try {
-      const result = await this.nft.mintBlindBatch(
-        commitments.map((c) => c.metadataHash),
-        mintSeed,
-      );
+      const result = await this.nft.mintBlindBatch(commitments.map((c) => c.metadataHash));
       const pairs = result.nfts.map((nft, i) => [nft, commitments[i]!] as const);
       await Promise.all(pairs.map(([nft, c]) => saveCommitment(nft, c)));
 
@@ -1220,7 +1673,7 @@ export class AppState {
               : recordActionHash(await this.social.createCollection(group));
           await Promise.all(
             result.nfts.map((nft) =>
-              this.social.addToCollection({ collection, target: nft, targetRole: NFT_ROLE }),
+              this.social.addToCollection({ collection, target: nft, targetRole: this.nftRoleName }),
             ),
           );
           await this.loadMyCollections();
@@ -1231,7 +1684,7 @@ export class AppState {
 
       toast.success(`Minted a blind batch of ${result.nfts.length}`);
       this.log("info", `Minted blind batch ${shortHash(result.batch)}`);
-      await Promise.all([this.loadMyNfts(), this.loadDrafts()]);
+      await Promise.all([this.loadMyNfts(), this.loadDrafts(), this.loadBlindBatches()]);
       return result;
     } catch (e) {
       toast.error(`Failed to mint blind batch: ${errText(e)}`);
@@ -1239,72 +1692,81 @@ export class AppState {
     }
   }
 
-  /**
-   * Buyer-side: reserve a purchase against a batch. The returned
-   * `buyerNonce` is generated by the zome call itself (see `NftClient`'s
-   * doc comment) — the caller (dialog) is responsible for persisting it
-   * client-side; there's no way to recover it later.
-   */
-  async reserveBlindPurchase(
-    batch: ActionHash,
-  ): Promise<{ purchase: ActionHash; buyerNonce: Uint8Array } | null> {
+  /** Buyer-side: reserve a purchase against a finalized batch. */
+  async reserveBlindPurchase(batch: ActionHash): Promise<ActionHash | null> {
     try {
       const out = await this.nft.reserveBlindPurchase(batch);
-      toast.success("Purchase reserved — waiting on payment and resolution");
+      toast.success("Purchase reserved — the minter includes it when closing the batch");
       this.log("info", `Reserved blind purchase for batch ${shortHash(batch)}`);
-      return out;
+      return out.purchase;
     } catch (e) {
       toast.error(`Failed to reserve purchase: ${errText(e)}`);
       return null;
     }
   }
 
-  /**
-   * The purchase's `batch` and its authoritative buyer (the record's own
-   * author — see `blind_collection.rs`'s `BlindPurchaseCommitment` doc for
-   * why that's the source of truth, not a stored field). `null` if not
-   * found.
-   */
-  async blindPurchaseInfo(
-    purchase: ActionHash,
-  ): Promise<{ batch: ActionHash; buyer: AgentPubKey } | null> {
-    const rec = await this.nft.getBlindPurchase(purchase).catch(() => null);
-    if (!rec) return null;
-    const entry = decodeEntry<BlindPurchaseCommitment>(rec);
-    return {
-      batch: entry.batch,
-      buyer: rec.signed_action.hashed.content.header.author,
-    };
+  /** Minter-side: commit the purchase set and close the batch (1 <= K <= N). */
+  async closeBlindBatch(batch: ActionHash): Promise<boolean> {
+    try {
+      await this.nft.closeBatch(batch);
+      toast.success("Batch closed");
+      this.log("info", `Closed blind batch ${shortHash(batch)}`);
+      await this.loadBlindBatches();
+      return true;
+    } catch (e) {
+      toast.error(`Failed to close batch: ${errText(e)}`);
+      return false;
+    }
   }
 
   /**
-   * Minter-side, demo mode — direct extension of `settleFromRave`: no real
-   * RAVE exists, the settlement fields are fabricated from data already on
-   * hand. `mintSeed` must be the exact bytes this purchase's batch was
-   * minted with.
+   * DEV ONLY / INSECURE: records browser-generated randomness for a close using
+   * the dev verifier. This is NOT secure randomness and must not be treated as
+   * authoritative; a real provider replaces it.
    */
-  async resolveBlindAssignment(
-    purchase: ActionHash,
-    mintSeed: Uint8Array,
-    buyerKey: AgentPubKey,
-    fulfilled: boolean,
-  ): Promise<ActionHash | null> {
+  async recordDevRandomness(close: ActionHash): Promise<boolean> {
     try {
-      const out = await this.nft.resolveBlindAssignmentFromRave({
-        purchase,
-        mintSeed,
-        rave: purchase, // no real RAVE exists — same placeholder pattern as settleFromRave
-        fulfilled,
-        nftId: b64(purchase),
-        newOwner: b64(buyerKey),
-        previousOwner: b64(this.me),
-      });
-      toast.success("Assignment resolved — transfer offered to buyer");
-      this.log("info", `Resolved blind purchase ${shortHash(purchase)}`);
-      return out.commitment;
+      const randomness = new Uint8Array(32);
+      crypto.getRandomValues(randomness);
+      await this.nft.recordDevRandomness(close, new TextEncoder().encode("dev-event"), randomness);
+      toast.success("Dev randomness recorded (insecure — testing only)");
+      await this.loadBlindBatches();
+      return true;
     } catch (e) {
-      toast.error(`Failed to resolve assignment: ${errText(e)}`);
-      return null;
+      toast.error(`Failed to record randomness: ${errText(e)}`);
+      return false;
+    }
+  }
+
+  /** The deterministic assignment for a batch whose randomness is fixed. */
+  async loadBatchAssignments(close: ActionHash, result: ActionHash): Promise<AssignmentView[]> {
+    try {
+      return await this.nft.getAssignments(close, result);
+    } catch (e) {
+      toast.error(`Failed to compute assignments: ${errText(e)}`);
+      return [];
+    }
+  }
+
+  /** Minter-side: offer an assigned NFT to its assigned buyer. */
+  async releaseAssignment(
+    a: AssignmentView,
+    close: ActionHash,
+    result: ActionHash,
+  ): Promise<boolean> {
+    try {
+      await this.nft.releaseBatchTransfer({
+        nft: a.nft,
+        close,
+        result,
+        purchase: a.purchase,
+      });
+      toast.success("Transfer offered to the assigned buyer");
+      this.log("info", `Released ${shortHash(a.nft)} to ${shortHash(a.buyer)}`);
+      return true;
+    } catch (e) {
+      toast.error(`Failed to release: ${errText(e)}`);
+      return false;
     }
   }
 }

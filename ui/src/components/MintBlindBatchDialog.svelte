@@ -1,7 +1,7 @@
 <script lang="ts">
   import { prepareCommitment, type NftAttribute } from "@p2p-art-marketplace/client";
-  import { useAppState } from "$lib/appState.svelte";
-  import { b64, toHex, unb64 } from "$lib/format";
+  import { AppState, useAppState } from "$lib/appState.svelte";
+  import { b64, unb64 } from "$lib/format";
 
   let { open = $bindable(false) }: { open: boolean } = $props();
 
@@ -15,15 +15,10 @@
   });
 
   /**
-   * `mint_blind_batch` needs a real, distinct reveal commitment per slot —
-   * same as an ordinary mint, just N of them (see `MintForm.svelte`). A
-   * `batchSize`-only form can't actually call this extern. This demo form
-   * generates each slot's attributes from one shared template plus a slot
-   * number rather than asking for N full attribute rows — the minter's
-   * secret pre-shuffle (see DESIGN.md step 1) is exactly this: which real
-   * attributes end up at which slot is never written down anywhere
-   * `validate()` can see, so a template + index is a legitimate way to
-   * produce distinct-but-related items, not a shortcut around the design.
+   * A blind batch commits N distinct sealed NFTs up front (one reveal
+   * commitment per slot, same as an ordinary mint). This demo form generates
+   * each slot's attributes from one shared template plus a slot number rather
+   * than asking for N full attribute rows.
    */
   let batchSize = $state(10);
   let namePrefix = $state("Mystery Item");
@@ -44,14 +39,8 @@
     return salt;
   }
 
-  function randomSeed(): Uint8Array {
-    const seed = new Uint8Array(32);
-    crypto.getRandomValues(seed);
-    return seed;
-  }
-
   async function submit() {
-    const n = Math.max(1, Math.min(10_000, Math.floor(batchSize)));
+    const n = Math.max(1, Math.min(AppState.MAX_UI_BATCH_SIZE, Math.floor(batchSize)));
     busy = true;
     try {
       const commitments = Array.from({ length: n }, (_, i) => {
@@ -61,7 +50,6 @@
         const imageUri = imageUriTemplate.trim().replace("{i}", String(i));
         return prepareCommitment(attributes, imageUri, randomSalt());
       });
-      const mintSeed = randomSeed();
 
       const group = !groupIntoCollection
         ? undefined
@@ -72,17 +60,8 @@
               description: newCollectionDescription.trim(),
             };
 
-      const result = await app.mintBlindBatch(commitments, mintSeed, group);
-      if (result) {
-        // No on-chain way to recover mint_seed — the minter's own client
-        // must hold onto it, keyed by batch hash, until every purchase
-        // against this batch is resolved. sessionStorage is a demo-only
-        // stand-in; see docs/blind-box-collections.md's UI-storage note —
-        // a real minter needs durable, backed-up storage, same category as
-        // saltStore's reveal commitments.
-        sessionStorage.setItem(`blind-seed:${toHex(result.batch)}`, toHex(mintSeed));
-        open = false;
-      }
+      const result = await app.mintBlindBatch(commitments, group);
+      if (result) open = false;
     } finally {
       busy = false;
     }
@@ -93,14 +72,22 @@
   <div class="stack" style="min-width: min(440px, 88vw)">
     <h3>Mint a blind-box batch</h3>
     <p class="faint small">
-      Mints <code>{batchSize}</code> sealed NFTs. Each stays hidden until a
-      buyer's purchase is resolved and you reveal it individually (same
-      Reveal flow as an ordinary mint).
+      Commits <code>{batchSize}</code> sealed NFTs as a fixed inventory. Once
+      buyers have purchased and you close the batch, randomness picks which of
+      the committed NFTs are sold and which buyer gets which. Each item stays
+      hidden until it is transferred and you reveal it (same Reveal flow as an
+      ordinary mint).
     </p>
 
     <label class="field">
-      <span>Batch size</span>
-      <input type="number" min="1" max="10000" bind:value={batchSize} disabled={busy} />
+      <span>Batch size (max {AppState.MAX_UI_BATCH_SIZE})</span>
+      <input
+        type="number"
+        min="1"
+        max={AppState.MAX_UI_BATCH_SIZE}
+        bind:value={batchSize}
+        disabled={busy}
+      />
     </label>
     <label class="field">
       <span>Name prefix — each item becomes "prefix #N"</span>

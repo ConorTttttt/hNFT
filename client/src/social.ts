@@ -3,6 +3,7 @@ import type {
   AgentPubKey,
   AnyDhtHash,
   AppWebsocket,
+  DnaHash,
   Record as HcRecord,
 } from "@holochain/client";
 import { SignalType } from "@holochain/client";
@@ -70,6 +71,41 @@ export interface AddToCollectionInput {
 export interface CollectionItemView {
   target: AnyDhtHash;
   target_role: string;
+}
+
+// --- Phase J.3: network-wide NFT-collection discovery -----------------------
+// See `dnas/social/zomes/integrity/social/src/nft_collection_registry.rs` for
+// the protocol and its authorization boundary. Higher-level parsing/opening
+// helpers live in `nftCollectionDiscovery.ts`, which is what most UI code
+// should use instead of this class's raw methods.
+
+export interface RegisterNftCollectionInput {
+  /** The `nft` clone's own `DnaHash` — read from local conductor state, not
+   * invented client-side. See `publishNftCollectionForDiscovery`. */
+  dnaHash: DnaHash;
+  networkSeed: string;
+  propertiesJson: string;
+}
+
+/** The `NftCollectionRegistration` entry as it decodes off the wire. */
+export interface NftCollectionRegistrationEntry {
+  dna_hash: DnaHash;
+  network_seed: string;
+  properties_json: string;
+}
+
+/** From `discover_nft_collections` — already resolved/deduplicated by
+ * `dna_hash` server-side; see the coordinator zome's doc for the tie-break
+ * rule. `registered_by` is real (the entry's actual author) but is NOT proof
+ * of "true creatorship" of the underlying `nft` collection — see the
+ * integrity module's authorization-boundary note. */
+export interface NftCollectionDiscoveryView {
+  registration: ActionHash;
+  dna_hash: DnaHash;
+  network_seed: string;
+  properties_json: string;
+  registered_by: AgentPubKey;
+  registered_at_micros: number;
 }
 
 /** Best-effort handshake nudge delivered via `recv_remote_signal`. */
@@ -213,6 +249,31 @@ export class SocialClient {
   /** Every collection in the global directory, any curator. */
   allCollections(): Promise<HcRecord[]> {
     return this.call("all_collections", null);
+  }
+
+  // --- Phase J.3: network-wide NFT-collection discovery -------------------
+
+  registerNftCollection(args: RegisterNftCollectionInput): Promise<HcRecord> {
+    return this.call("register_nft_collection", {
+      dna_hash: args.dnaHash,
+      network_seed: args.networkSeed,
+      properties_json: args.propertiesJson,
+    });
+  }
+
+  unregisterNftCollection(registration: ActionHash): Promise<void> {
+    return this.call("unregister_nft_collection", registration);
+  }
+
+  /** This agent's own published registrations. */
+  myNftCollectionRegistrations(): Promise<HcRecord[]> {
+    return this.call("my_nft_collection_registrations", null);
+  }
+
+  /** Every network-wide-discoverable NFT collection, deduplicated by
+   * `dna_hash`. See `NftCollectionDiscoveryView`'s doc. */
+  discoverNftCollections(): Promise<NftCollectionDiscoveryView[]> {
+    return this.call("discover_nft_collections", null);
   }
 
   // --- signals ---------------------------------------------------------

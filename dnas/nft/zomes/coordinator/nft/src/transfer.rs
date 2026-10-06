@@ -49,7 +49,7 @@ pub fn initiate_transfer(input: InitiateTransferInput) -> ExternResult<InitiateT
         to_agent: input.to_agent.clone(),
         prev_state,
         sequence,
-        blind_reveal: None,
+        batch_release: None,
     };
     let commitment_hash = create_entry(&EntryTypes::TransferCommitment(commitment))?;
 
@@ -85,9 +85,9 @@ pub struct CommitmentRef {
 pub fn accept_transfer(input: CommitmentRef) -> ExternResult<Record> {
     let me = agent_info()?.agent_initial_pubkey;
 
-    let commitment_rec = get(input.commitment.clone(), GetOptions::default())?.ok_or(wasm_error!(
-        WasmErrorInner::Guest("commitment not found".into())
-    ))?;
+    let commitment_rec = get(input.commitment.clone(), GetOptions::default())?.ok_or(
+        wasm_error!(WasmErrorInner::Guest("commitment not found".into())),
+    )?;
     let commitment: TransferCommitment = commitment_rec
         .entry()
         .to_app_option()
@@ -140,9 +140,9 @@ pub fn accept_transfer(input: CommitmentRef) -> ExternResult<Record> {
 pub fn cancel_transfer(input: CommitmentRef) -> ExternResult<Record> {
     let me = agent_info()?.agent_initial_pubkey;
 
-    let commitment_rec = get(input.commitment.clone(), GetOptions::default())?.ok_or(wasm_error!(
-        WasmErrorInner::Guest("commitment not found".into())
-    ))?;
+    let commitment_rec = get(input.commitment.clone(), GetOptions::default())?.ok_or(
+        wasm_error!(WasmErrorInner::Guest("commitment not found".into())),
+    )?;
     if commitment_rec.action().author() != &me {
         return Err(wasm_error!(WasmErrorInner::Guest(
             "only the offerer may cancel this commitment".into()
@@ -156,13 +156,17 @@ pub fn cancel_transfer(input: CommitmentRef) -> ExternResult<Record> {
             "referenced action is not a TransferCommitment".into()
         )))?;
 
-    let cancellation_hash = create_entry(&EntryTypes::TransferCancellation(TransferCancellation {
-        commitment: input.commitment.clone(),
-    }))?;
+    let cancellation_hash =
+        create_entry(&EntryTypes::TransferCancellation(TransferCancellation {
+            commitment: input.commitment.clone(),
+        }))?;
 
     // Remove the offer from the buyer's inbox (seller authored that link).
     let inbox = get_links(
-        LinkQuery::try_new(commitment.to_agent.clone(), LinkTypes::AgentToInboundCommitment)?,
+        LinkQuery::try_new(
+            commitment.to_agent.clone(),
+            LinkTypes::AgentToInboundCommitment,
+        )?,
         GetStrategy::Network,
     )?;
     for link in inbox {

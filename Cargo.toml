@@ -16,7 +16,7 @@ debug = 0
 opt-level = 1
 
 [workspace]
-members = ["dnas/*/zomes/coordinator/*", "dnas/*/zomes/integrity/*"]
+members = ["dnas/*/zomes/coordinator/*", "dnas/*/zomes/integrity/*", "happ_tests"]
 resolver = "2"
 
 [workspace.dependencies]

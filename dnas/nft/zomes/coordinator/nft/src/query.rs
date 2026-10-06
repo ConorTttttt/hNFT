@@ -98,9 +98,10 @@ fn resolve_hops(nft: &ActionHash) -> ExternResult<Vec<ProvenanceHop>> {
         let Some(receipt_action) = link.target.into_action_hash() else {
             continue;
         };
-        let receipt_rec = get(receipt_action.clone(), GetOptions::default())?.ok_or(wasm_error!(
-            WasmErrorInner::Guest("provenance: receipt record missing".into())
-        ))?;
+        let receipt_rec =
+            get(receipt_action.clone(), GetOptions::default())?.ok_or(wasm_error!(
+                WasmErrorInner::Guest("provenance: receipt record missing".into())
+            ))?;
         let receipt: TransferReceipt = receipt_rec
             .entry()
             .to_app_option()
@@ -108,11 +109,10 @@ fn resolve_hops(nft: &ActionHash) -> ExternResult<Vec<ProvenanceHop>> {
             .ok_or(wasm_error!(WasmErrorInner::Guest(
                 "provenance: not a TransferReceipt".into()
             )))?;
-        let commitment_rec = get(receipt.commitment.clone(), GetOptions::default())?.ok_or(
-            wasm_error!(WasmErrorInner::Guest(
-                "provenance: commitment record missing".into()
-            )),
-        )?;
+        let commitment_rec =
+            get(receipt.commitment.clone(), GetOptions::default())?.ok_or(wasm_error!(
+                WasmErrorInner::Guest("provenance: commitment record missing".into())
+            ))?;
         let commitment: TransferCommitment = commitment_rec
             .entry()
             .to_app_option()

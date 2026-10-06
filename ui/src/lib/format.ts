@@ -41,24 +41,6 @@ export function relativeFuture(ms: number): string {
   return `in ${Math.round(hrs / 24)}d`;
 }
 
-/** Plain hex, no `0x` prefix — used for blind-box secrets (`mint_seed`,
- * `buyer_nonce`) kept in `sessionStorage`, distinct from the base64
- * `HoloHash` encoding `b64`/`unb64` handle. */
-export function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-export function fromHex(hex: string): Uint8Array {
-  if (hex.length % 2 !== 0) throw new Error("invalid hex: odd length");
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
-
 export function eqHash(a?: Uint8Array, b?: Uint8Array): boolean {
   if (!a || !b || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;

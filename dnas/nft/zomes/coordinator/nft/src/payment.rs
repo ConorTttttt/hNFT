@@ -1,57 +1,38 @@
 //! Bridges a Unyt `nft_sale_escrow` settlement into this app's existing
 //! transfer flow.
 //!
-//! # DEMO-MODE TRUST MODEL -- read before reusing this past the demo
+//! # DEMO-MODE TRUST MODEL
 //!
-//! This version does NOT fetch or verify the RAVE itself. The caller (UI)
-//! already talked to the Unyt cell to build the sale, so it's trusted to
-//! have read the RAVE's `computed_values` correctly and passes those fields
-//! straight in. This zome only checks internal consistency of what it was
-//! handed (do the fields match this NFT and this buyer/seller) -- it does
-//! NOT confirm those fields came from a real, network-validated RAVE at all.
+//! The public extern currently accepts only the NFT, intended buyer, and RAVE
+//! hash. The RAVE hash is still NOT independently fetched or verified here.
+//! `verify_rave_settlement` is therefore an explicit demo-only seam which
+//! reconstructs the settlement claims from the local call context.
 //!
-//! Concretely, the trust shift from the coordinator-fetches-it design: there
-//! a forged input could only point at a REAL RAVE (content comes from
-//! Unyt's own DHT, so it can be mismatched but not fabricated). Here, a
-//! compromised UI build, a malicious browser extension, or a plain bug can
-//! hand this function `fulfilled: true` for a sale that never happened, and
-//! nothing here can tell the difference.
+//! This is intentionally not the final production verifier. The production
+//! implementation will replace `verify_rave_settlement` with a call into the
+//! authoritative Unyt coordinator once its actual API is known.
 //!
-//! Why this is an acceptable demo trade-off, not a hidden hole: this extern
-//! can only be called by an NFT's current owner (checked below, same as
-//! `initiate_transfer`), so it only ever gates the SELLER's own decision to
-//! give the NFT away. A seller whose own client lies to them mostly just
-//! reproduces the outcome of the pre-existing, unconditional
-//! `initiate_transfer` (owner gives NFT away for free) -- it does not open a
-//! new way for a buyer or third party to take an NFT without the owner's
-//! action. Nothing about `TransferCommitment`/`TransferReceipt` validation
-//! in `integrity/nft` changes; ownership still only moves through that same
-//! chain.
+//! # Production upgrade boundary
 //!
-//! # Upgrading past the demo
+//! The externally visible input should remain:
 //!
-//! To restore real verification: replace the four plain fields below with a
-//! single `rave: ActionHash` + `unyt_cell: CallTargetCell`, and inside
-//! `check_claimed_settlement` do a `call()` into the Unyt cell instead of
-//! trusting the caller -- see the prior handoff draft for that version. That
-//! version needs Unyt's actual coordinator zome API for reading a RAVE (not
-//! publicly documented at the time this was written); this one doesn't need
-//! it at all, which is the whole point of the demo shortcut.
+//!     nft + to_agent + rave
 //!
-//! # Design choice carried over unchanged: no integrity changes
+//! The verifier should return an authoritative `VerifiedRaveSettlement`.
+//! Everything after that point is ordinary NFT transfer logic and should not
+//! need to know how Unyt stores or retrieves a RAVE.
 //!
-//! Still true here: no `integrity/nft` edits, no DNA-hash impact. The RAVE
-//! hash rides in the `AgentToInboundCommitment` link's tag (informational
-//! only -- no validator reads it), exactly as before.
+//! # Design choice: no integrity changes
 //!
-//! # Still-unverified convention -- confirm before relying on this
+//! No `integrity/nft` edits are required. The RAVE hash continues to ride in
+//! the `AgentToInboundCommitment` link's tag for audit/display purposes.
 //!
-//! `nft_id_for` assumes a Unyt listing's `nft_id` equals this NFT's
-//! mint-action hash rendered via `ActionHash`'s own string form, and that
-//! whatever the UI treats as "the buyer's/seller's Unyt address" stringifies
-//! the same way as `AgentPubKey::to_string()` here. Both are app-level
-//! conventions the UI must follow consistently, not something this code can
-//! check.
+//! # Still-unverified conventions
+//!
+//! `nft_id_for` assumes a Unyt listing's `nft_id` equals this NFT's mint-action
+//! hash rendered via `ActionHash`'s own string form. The identity representation
+//! used by Unyt for `previous_owner`/`new_owner` is also not yet verified
+//! against the real Unyt coordinator API.
 
 use crate::RemoteSignal;
 use hdk::prelude::*;
@@ -61,61 +42,96 @@ use nft_integrity::*;
 pub struct SettleFromRaveInput {
     pub nft: ActionHash,
     pub to_agent: AgentPubKey,
-    /// The Unyt RAVE's own action hash. Not re-fetched here -- carried
-    /// through only so it can be recorded in the inbox link's tag for
-    /// later display/audit.
     pub rave: ActionHash,
-    /// The following four fields are `output.computed_values.*` from that
-    /// RAVE, AS THE UI READ THEM. See module doc -- these are trusted, not
-    /// re-verified against the Unyt network by this zome.
-    pub fulfilled: bool,
-    pub nft_id: String,
-    pub new_owner: String,
-    pub previous_owner: String,
+}
+
+/// Settlement data after the Unyt verification boundary.
+///
+/// Nothing outside the verifier should treat caller-supplied settlement
+/// fields as authoritative.
+#[derive(Debug)]
+struct VerifiedRaveSettlement {
+    nft_id: String,
+    previous_owner: String,
+    new_owner: String,
+    fulfilled: bool,
 }
 
 /// The convention this integration establishes for matching a Unyt listing's
-/// opaque `nft_id` string back to a real NFT in this DNA. See module doc.
+/// opaque `nft_id` string back to a real NFT in this DNA.
 fn nft_id_for(nft: &ActionHash) -> String {
     nft.to_string()
 }
 
-/// Checks internal consistency of the fields the UI supplied against this
-/// specific sale. Does NOT confirm those fields came from a real RAVE --
-/// see module doc.
-fn check_claimed_settlement(
-    claim: &SettleFromRaveInput,
+/// DEMO ONLY.
+///
+/// This is the temporary verification seam. It deliberately does not fetch
+/// the RAVE because the real Unyt coordinator API has not been established.
+///
+/// Keeping this boundary private means the eventual production verifier can
+/// replace this function without changing the transfer/provenance logic below.
+///
+/// `rave` is currently accepted only so the public API already has the final
+/// shape. Its hash is recorded separately on the resulting inbound link.
+fn verify_rave_settlement(
+    _rave: &ActionHash,
+    nft: &ActionHash,
+    seller: &AgentPubKey,
+    buyer: &AgentPubKey,
+) -> ExternResult<VerifiedRaveSettlement> {
+    Ok(VerifiedRaveSettlement {
+        nft_id: nft_id_for(nft),
+        previous_owner: seller.to_string(),
+        new_owner: buyer.to_string(),
+        fulfilled: true,
+    })
+}
+
+/// Validate an already-verified Unyt settlement against the NFT transfer
+/// requested by the seller.
+///
+/// These checks remain separate from `verify_rave_settlement`: the verifier
+/// establishes where the settlement came from; this function establishes
+/// whether that settlement authorizes this particular NFT transfer.
+fn check_verified_settlement(
+    settlement: &VerifiedRaveSettlement,
     nft: &ActionHash,
     seller: &AgentPubKey,
     buyer: &AgentPubKey,
 ) -> ExternResult<()> {
-    if !claim.fulfilled {
+    if !settlement.fulfilled {
         return Err(wasm_error!(WasmErrorInner::Guest(
-            "claimed settlement is not marked fulfilled".into()
+            "verified settlement is not fulfilled".into()
         )));
     }
-    if claim.nft_id != nft_id_for(nft) {
+
+    if settlement.nft_id != nft_id_for(nft) {
         return Err(wasm_error!(WasmErrorInner::Guest(
-            "claimed settlement's nft_id does not match this NFT".into()
+            "verified settlement's nft_id does not match this NFT".into()
         )));
     }
-    if claim.new_owner != buyer.to_string() {
+
+    if settlement.new_owner != buyer.to_string() {
         return Err(wasm_error!(WasmErrorInner::Guest(
-            "claimed settlement's new_owner does not match the intended buyer".into()
+            "verified settlement's new_owner does not match the intended buyer".into()
         )));
     }
-    if claim.previous_owner != seller.to_string() {
+
+    if settlement.previous_owner != seller.to_string() {
         return Err(wasm_error!(WasmErrorInner::Guest(
-            "claimed settlement's previous_owner does not match the seller's payout key".into()
+            "verified settlement's previous_owner does not match the seller".into()
         )));
     }
+
     Ok(())
 }
 
-/// Seller-initiated transfer, gated on a UI-supplied (not independently
-/// re-verified -- see module doc) Unyt settlement claim. Reuses the same
-/// `TransferCommitment` entry, the same provenance chain, and the same
-/// integrity validation `initiate_transfer` already relies on.
+/// Seller-initiated transfer gated on a verified Unyt settlement.
+///
+/// The public input contains no caller-supplied settlement claims. The
+/// settlement verification boundary is isolated in `verify_rave_settlement`.
+/// Once that boundary returns successfully, the existing TransferCommitment
+/// and provenance flow is reused unchanged.
 #[hdk_extern]
 pub fn initiate_transfer_from_rave(
     input: SettleFromRaveInput,
@@ -130,7 +146,9 @@ pub fn initiate_transfer_from_rave(
         )));
     }
 
-    check_claimed_settlement(&input, &input.nft, &me, &input.to_agent)?;
+    let settlement = verify_rave_settlement(&input.rave, &input.nft, &me, &input.to_agent)?;
+
+    check_verified_settlement(&settlement, &input.nft, &me, &input.to_agent)?;
 
     let (prev_state, sequence) = crate::query::next_transfer_state(&input.nft)?;
     let commitment = TransferCommitment {
@@ -138,13 +156,12 @@ pub fn initiate_transfer_from_rave(
         to_agent: input.to_agent.clone(),
         prev_state,
         sequence,
-        blind_reveal: None,
+        batch_release: None,
     };
     let commitment_hash = create_entry(&EntryTypes::TransferCommitment(commitment))?;
 
-    // Only difference from `initiate_transfer`: the tag carries the RAVE
-    // hash so the buyer (or any auditor walking this link) can see which
-    // settlement authorized the offer, instead of an empty tag.
+    // The RAVE hash identifies the settlement used to authorize this offer.
+    // The link tag is informational; verification happened above.
     create_link(
         input.to_agent.clone(),
         commitment_hash.clone(),

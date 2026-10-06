@@ -24,7 +24,11 @@
   <InterestShelf />
 
   <div class="panel stack">
-    <h3>Recent activity</h3>
+    <h3>Session activity</h3>
+    <p class="faint small" style="margin: 0">
+      This device's actions and notifications since the app was opened — not a
+      persistent history, and it resets when you switch collection.
+    </p>
     {#if !app.activity.length}
       <div class="empty small">
         Nothing yet this session. Mints, transfers and reveals show up here.

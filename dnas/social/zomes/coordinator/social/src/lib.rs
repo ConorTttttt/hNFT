@@ -2,6 +2,7 @@ pub mod collection;
 pub mod comment;
 pub mod follow;
 pub mod like;
+pub mod nft_collection_registry;
 
 use hdk::prelude::*;
 

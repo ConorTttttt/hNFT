@@ -150,11 +150,89 @@ pub fn mint_with_agreement(input: MintWithAgreementInput) -> ExternResult<MintNf
     })
 }
 
-/// UI helper: may the calling agent mint in this collection?
+/// UI helper (Phase J.2): may the calling agent mint in this collection RIGHT
+/// NOW, and what does their personal cap/progress look like? A read-only
+/// reflection of authoritative state — never a second authorization decision.
+/// The actual gate for every mint is still the integrity validator, which
+/// resolves `mint_mode()` and reaches `eligible`'s answer independently.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MintPolicyView {
+    Public,
+    CreatorOnly,
+    Whitelist,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MintStatus {
+    pub policy: MintPolicyView,
+    /// Mirrors what `is_minter()` used to return standalone — the
+    /// authoritative "may I mint right now" answer.
+    pub eligible: bool,
+    /// This agent's own lifetime `NftManifest` mint count, from their own
+    /// local chain (no network call) — meaningful under every policy, not
+    /// just WHITELIST.
+    pub minted_by_me: u32,
+    /// This agent's personal cap, when one applies to them specifically:
+    /// their whitelist allowance, or — only when THIS agent IS the fixed
+    /// creator — the collection's `max_supply`. `None` under PUBLIC (no
+    /// personal cap exists), for a non-creator under CREATOR_ONLY, or for an
+    /// agent absent from the whitelist under WHITELIST.
+    pub my_allowance: Option<u32>,
+}
+
+#[hdk_extern]
+pub fn mint_status(_: ()) -> ExternResult<MintStatus> {
+    let me = agent_info()?.agent_initial_pubkey;
+    let minted_by_me = count_my_manifest_mints()?;
+    let props = CollectionProperties::get()?;
+    match props.mint_mode()? {
+        MintMode::Public => Ok(MintStatus {
+            policy: MintPolicyView::Public,
+            eligible: true,
+            minted_by_me,
+            my_allowance: None,
+        }),
+        MintMode::CreatorOnly(minter) => {
+            let is_creator = minter == me;
+            Ok(MintStatus {
+                policy: MintPolicyView::CreatorOnly,
+                eligible: is_creator,
+                minted_by_me,
+                my_allowance: (is_creator && props.max_supply > 0).then_some(props.max_supply),
+            })
+        }
+        MintMode::Whitelist(entries) => {
+            let my_allowance = entries.iter().find(|(a, _)| *a == me).map(|(_, n)| *n);
+            let eligible = my_allowance.is_some_and(|n| minted_by_me < n);
+            Ok(MintStatus {
+                policy: MintPolicyView::Whitelist,
+                eligible,
+                minted_by_me,
+                my_allowance,
+            })
+        }
+    }
+}
+
+/// UI helper: may the calling agent mint in this collection RIGHT NOW? Kept
+/// for existing/simple callers; `mint_status` returns the same answer plus
+/// allowance/progress detail.
 #[hdk_extern]
 pub fn is_minter(_: ()) -> ExternResult<bool> {
-    match CollectionProperties::minter()? {
-        None => Ok(true), // open minting (dev)
-        Some(minter) => Ok(minter == agent_info()?.agent_initial_pubkey),
-    }
+    Ok(mint_status(())?.eligible)
+}
+
+/// Counts the calling agent's own prior `NftManifest` creates, over their own
+/// local chain (`query()` — no network round-trip; local-only, same as the
+/// `GetStrategy::Local` pattern this codebase already uses for own-data reads
+/// elsewhere). Used only for the UI-facing `is_minter` reflection; the
+/// authoritative count enforced at mint time is computed independently, over
+/// `must_get_agent_activity`, in `validate_create_nft_manifest`.
+fn count_my_manifest_mints() -> ExternResult<u32> {
+    let records = query(ChainQueryFilter::new())?;
+    Ok(records
+        .iter()
+        .filter(|r| is_nft_manifest_create(r.action()))
+        .count() as u32)
 }

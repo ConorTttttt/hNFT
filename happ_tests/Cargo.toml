@@ -1,0 +1,18 @@
+[package]
+name = "happ_tests"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[lib]
+name = "happ_tests"
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+holochain = { workspace = true, features = ["wasmer-sys-cranelift", "test_utils"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+holochain_serialized_bytes = { workspace = true }

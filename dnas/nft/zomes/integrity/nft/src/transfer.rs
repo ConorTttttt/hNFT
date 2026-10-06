@@ -1,5 +1,6 @@
+use crate::blind_collection::{validate_batch_release, BatchRelease};
 use crate::dna_properties::CollectionProperties;
-use crate::nft_manifest::is_create_of;
+use crate::nft_manifest::{is_create_of, NftManifest};
 use crate::UnitEntryTypes;
 use hdi::prelude::*;
 
@@ -17,13 +18,11 @@ pub struct TransferCommitment {
     pub prev_state: ActionHash,
     /// `1` for the first transfer, `+1` per hop thereafter.
     pub sequence: u32,
-    /// Set only for a blind-box redemption: the `BlindAssignmentReveal` that
-    /// authorizes this transfer. When present, validate() confirms
-    /// `to_agent` is exactly the purchase's own author -- see
-    /// `validate_create_transfer_commitment` below. `None` for an ordinary,
-    /// non-blind transfer.
+    /// Mandatory for the FIRST transfer of a blind-batch NFT, forbidden
+    /// otherwise. Validators reconstruct the assignment from it; see
+    /// `blind_collection::validate_batch_release`. `None` for ordinary NFTs.
     #[serde(default)]
-    pub blind_reveal: Option<ActionHash>,
+    pub batch_release: Option<BatchRelease>,
 }
 
 /// Authored by the BUYER named in the commitment. Accepting the offer.
@@ -89,8 +88,8 @@ pub fn validate_create_transfer_commitment(
     // 1. Seller must currently hold the state `prev_state` names.
     if entry.prev_state == entry.nft {
         // First transfer: prev_state is the mint. Seller must be the minter.
-        let mint = must_get_action(entry.nft.clone())?;
-        if mint.action().author() != &seller {
+        let mint_rec = must_get_valid_record(entry.nft.clone())?;
+        if mint_rec.action().author() != &seller {
             return Ok(ValidateCallbackResult::Invalid(
                 "first transfer must be authored by the NFT's minter".into(),
             ));
@@ -101,33 +100,34 @@ pub fn validate_create_transfer_commitment(
             ));
         }
 
-        // -- blind-box redemption binding --
-        if let Some(reveal_hash) = entry.blind_reveal.clone() {
-            let reveal_rec = must_get_valid_record(reveal_hash)?;
-            let reveal: crate::blind_collection::BlindAssignmentReveal = reveal_rec
-                .entry()
-                .to_app_option()
-                .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("{e:?}"))))?
-                .ok_or(wasm_error!(WasmErrorInner::Guest(
-                    "blind_reveal does not reference a BlindAssignmentReveal".into()
-                )))?;
-            if reveal_rec.action().author() != &seller {
+        // -- blind-batch release (G3a) --
+        // An NFT minted into a batch may only leave the minter through the
+        // deterministic assignment. There is no timestamp-based release.
+        let manifest: NftManifest = mint_rec
+            .entry()
+            .to_app_option()
+            .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("{e:?}"))))?
+            .ok_or(wasm_error!(WasmErrorInner::Guest(
+                "entry.nft is not an NftManifest".into()
+            )))?;
+        match (&manifest.batch, &entry.batch_release) {
+            (Some(_), None) => {
                 return Ok(ValidateCallbackResult::Invalid(
-                    "blind_reveal was not authored by this transfer's seller".into(),
+                    "a blind-batch NFT cannot be transferred without a BatchRelease".into(),
                 ));
             }
-            if reveal.assigned_nft != entry.nft {
+            (None, Some(_)) => {
                 return Ok(ValidateCallbackResult::Invalid(
-                    "blind_reveal.assigned_nft does not match this transfer's nft".into(),
+                    "BatchRelease cited for an NFT that is not in a batch".into(),
                 ));
             }
-            let purchase_rec = must_get_valid_record(reveal.purchase.clone())?;
-            let buyer = purchase_rec.action().author().clone();
-            if entry.to_agent != buyer {
-                return Ok(ValidateCallbackResult::Invalid(
-                    "blind-box transfer must go to the purchase's own author".into(),
-                ));
+            (Some(_), Some(release)) => {
+                match validate_batch_release(&entry.nft, &entry.to_agent, &manifest, release)? {
+                    ValidateCallbackResult::Valid => {}
+                    other => return Ok(other),
+                }
             }
+            (None, None) => {}
         }
     } else {
         // Later transfer: prev_state is the previously accepted TransferReceipt.
@@ -155,7 +155,11 @@ pub fn validate_create_transfer_commitment(
     //    this seller superseding the same `prev_state` unless it was cancelled.
     let prev = action
         .prev_action()
-        .ok_or_else(|| wasm_error!(WasmErrorInner::Guest("commitment has no prev_action".into())))?
+        .ok_or_else(|| {
+            wasm_error!(WasmErrorInner::Guest(
+                "commitment has no prev_action".into()
+            ))
+        })?
         .clone();
     if seller_has_open_duplicate(&seller, prev, &entry.nft, &entry.prev_state)? {
         return Ok(ValidateCallbackResult::Invalid(
@@ -183,8 +187,10 @@ pub fn validate_create_transfer_receipt(
     //    timestamps (available in validate()). Acceptance is valid only *within*
     //    the window; cancellation only *after* it. The two are disjoint.
     let props = CollectionProperties::get()?;
-    let deadline =
-        window_deadline_micros(commitment_rec.action().timestamp(), props.transfer_window_secs);
+    let deadline = window_deadline_micros(
+        commitment_rec.action().timestamp(),
+        props.transfer_window_secs,
+    );
     if action.timestamp().as_micros() > deadline {
         return Ok(ValidateCallbackResult::Invalid(
             "acceptance is after the transfer window closed".into(),
@@ -220,8 +226,10 @@ pub fn validate_create_transfer_cancellation(
     // ...and only once the window has closed, so a valid acceptance and a valid
     // cancellation can never coexist for one commitment.
     let props = CollectionProperties::get()?;
-    let deadline =
-        window_deadline_micros(commitment_rec.action().timestamp(), props.transfer_window_secs);
+    let deadline = window_deadline_micros(
+        commitment_rec.action().timestamp(),
+        props.transfer_window_secs,
+    );
     if action.timestamp().as_micros() <= deadline {
         return Ok(ValidateCallbackResult::Invalid(
             "cannot cancel before the transfer window closes".into(),
@@ -267,9 +275,7 @@ fn seller_has_open_duplicate(
         }
     }
 
-    Ok(matching_commitments
-        .iter()
-        .any(|h| !cancelled.contains(h)))
+    Ok(matching_commitments.iter().any(|h| !cancelled.contains(h)))
 }
 
 fn agent_already_accepted(

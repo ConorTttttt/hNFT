@@ -13,3 +13,6 @@ serde = { workspace = true }
 holochain_serialized_bytes = { workspace = true }
 # Commit-reveal hashing uses `holo_hash::blake2b_256` (re-exported via hdi's
 # prelude) — pure Rust, deterministic, available inside validate().
+
+[dev-dependencies]
+serde_json = "1"

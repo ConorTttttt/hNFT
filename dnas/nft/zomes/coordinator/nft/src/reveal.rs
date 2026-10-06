@@ -70,15 +70,25 @@ pub(crate) fn do_reveal(
             "original entry is not an NftManifest".into()
         )))?;
 
-    let computed = commit_hash(&reveal_preimage(
-        &secret.salt,
-        &secret.attributes,
-        &secret.image_uri,
-    ));
-    if computed != original_manifest.metadata_hash {
-        return Err(wasm_error!(WasmErrorInner::Guest(
-            "revealed metadata does not match the mint commitment".into()
-        )));
+    if CollectionProperties::get()?.generation.is_some() {
+        // Generative collection: traits are bound by the GenerationRecord, not
+        // the mint commitment (see `validate_update_nft_manifest`).
+        if secret.attributes != crate::generation::expected_attributes(&nft)? {
+            return Err(wasm_error!(WasmErrorInner::Guest(
+                "attributes differ from generate(config, recorded seed)".into()
+            )));
+        }
+    } else {
+        let computed = commit_hash(&reveal_preimage(
+            &secret.salt,
+            &secret.attributes,
+            &secret.image_uri,
+        ));
+        if computed != original_manifest.metadata_hash {
+            return Err(wasm_error!(WasmErrorInner::Guest(
+                "revealed metadata does not match the mint commitment".into()
+            )));
+        }
     }
 
     let revealed = NftManifest {
@@ -119,9 +129,9 @@ pub fn reveal_nft(input: RevealNftInput) -> ExternResult<Record> {
     if me != minter {
         // Delegate path: allowed only if a MintAgreement names me and reveal_by
         // has passed. (validate() re-checks this deterministically.)
-        let ag_hash = agreement_hash_for(&input.nft)?.ok_or(wasm_error!(
-            WasmErrorInner::Guest("only the minter may reveal this NFT".into())
-        ))?;
+        let ag_hash = agreement_hash_for(&input.nft)?.ok_or(wasm_error!(WasmErrorInner::Guest(
+            "only the minter may reveal this NFT".into()
+        )))?;
         let ag = load_agreement(&ag_hash)?;
         if ag.delegate.as_ref() != Some(&me) {
             return Err(wasm_error!(WasmErrorInner::Guest(

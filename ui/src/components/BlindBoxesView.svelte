@@ -3,25 +3,43 @@
   import { b64, eqHash, relativeTime, shortHash } from "$lib/format";
   import MintBlindBatchDialog from "./MintBlindBatchDialog.svelte";
   import ReserveBlindPurchaseDialog from "./ReserveBlindPurchaseDialog.svelte";
-  import ResolveBlindAssignmentDialog from "./ResolveBlindAssignmentDialog.svelte";
+  import BatchAssignmentsDialog from "./BatchAssignmentsDialog.svelte";
   import type { ActionHash } from "@holochain/client";
+  import type { BlindBatchView } from "$lib/appState.svelte";
 
   const app = useAppState();
 
   let showMintBatch = $state(false);
   let showReserve = $state(false);
   let reserveBatch = $state<ActionHash | null>(null);
-  let showResolve = $state(false);
-  let resolvePurchase = $state<ActionHash | null>(null);
+  let showAssign = $state(false);
+  let assignBatch = $state<BlindBatchView | null>(null);
+  let busyBatch = $state<string | null>(null);
 
   function openReserve(batch: ActionHash) {
     reserveBatch = batch;
     showReserve = true;
   }
-  function openResolve(purchase: ActionHash) {
-    resolvePurchase = purchase;
-    showResolve = true;
+  function openAssign(batch: BlindBatchView) {
+    assignBatch = batch;
+    showAssign = true;
   }
+  async function act(batch: BlindBatchView, fn: () => Promise<unknown>) {
+    busyBatch = b64(batch.batch);
+    try {
+      await fn();
+    } finally {
+      busyBatch = null;
+    }
+  }
+  const stateLabel: Record<string, string> = {
+    DRAFT: "draft",
+    SALES_OPEN: "sales open",
+    CLOSED: "closed",
+    RANDOMNESS_FIXED: "randomness fixed",
+  };
+  const openPurchases = (b: BlindBatchView) =>
+    app.myBatchPurchases.filter((p) => b64(p.batch) === b64(b.batch)).length;
 
   const myBatches = $derived(app.blindBatches.filter((b) => eqHash(b.minter, app.me)));
   const otherBatches = $derived(app.blindBatches.filter((b) => !eqHash(b.minter, app.me)));
@@ -39,33 +57,12 @@
     {/if}
   </div>
   <p class="faint small">
-    Each batch is a set of sealed NFTs assigned randomly to buyers once their
-    purchase resolves — see the collection's docs for how assignment is kept
-    fair before you buy.
+    Each batch commits a fixed inventory of N sealed NFTs. When the minter
+    closes it with K purchases (1 ≤ K ≤ N), randomness selects K of the N NFTs
+    and assigns them to the K purchases. The minter chooses which purchases are
+    included, and unselected NFTs stay locked — see the docs for what this does
+    and doesn't guarantee.
   </p>
-
-  {#if app.isMinter && app.myBatchPurchases.length}
-    <div class="panel stack tight">
-      <h4>Resolution queue · {app.myBatchPurchases.length}</h4>
-      <p class="faint small">
-        Purchases reserved against your own batches, waiting on a settlement
-        claim and resolution.
-      </p>
-      {#each app.myBatchPurchases as row (b64(row.purchase))}
-        <div class="row between wrap" style="gap: 0.5rem; align-items: center">
-          <div class="stack tight">
-            <span class="mono small">{shortHash(row.purchase)}</span>
-            <span class="faint small"
-              >buyer {shortHash(row.buyer)} · reserved {relativeTime(row.reservedAtMs)}</span
-            >
-          </div>
-          <button class="primary tiny" onclick={() => openResolve(row.purchase)}>
-            Resolve
-          </button>
-        </div>
-      {/each}
-    </div>
-  {/if}
 
   {#if myBatches.length}
     <div class="stack tight">
@@ -73,11 +70,34 @@
       <div class="grid">
         {#each myBatches as batch (b64(batch.batch))}
           <div class="panel stack tight">
-            <span class="pill cyan">mine</span>
+            <div class="row" style="gap: 0.4rem">
+              <span class="pill cyan">mine</span>
+              <span class="pill">{stateLabel[batch.state] ?? batch.state}</span>
+            </div>
             <span class="mono small">{shortHash(batch.batch)}</span>
             <span class="faint small"
               >{batch.batchSize} items · minted {relativeTime(batch.mintedAtMs)}</span
             >
+            {#if batch.state === "SALES_OPEN"}
+              <span class="faint small">{openPurchases(batch)} purchase(s) so far</span>
+              <button
+                class="primary tiny"
+                disabled={busyBatch !== null || openPurchases(batch) === 0}
+                onclick={() => act(batch, () => app.closeBlindBatch(batch.batch))}
+              >
+                Close batch
+              </button>
+            {:else if batch.state === "CLOSED" && batch.close}
+              <button
+                class="tiny"
+                disabled={busyBatch !== null}
+                onclick={() => act(batch, () => app.recordDevRandomness(batch.close!))}
+              >
+                Record dev randomness (insecure)
+              </button>
+            {:else if batch.state === "RANDOMNESS_FIXED"}
+              <button class="primary tiny" onclick={() => openAssign(batch)}>Assignments</button>
+            {/if}
           </div>
         {/each}
       </div>
@@ -96,9 +116,16 @@
                 batch.mintedAtMs,
               )}</span
             >
-            <button class="primary tiny" onclick={() => openReserve(batch.batch)}>
-              Buy blind
-            </button>
+            <div class="row" style="gap: 0.4rem">
+              <span class="pill">{stateLabel[batch.state] ?? batch.state}</span>
+            </div>
+            {#if batch.state === "SALES_OPEN"}
+              <button class="primary tiny" onclick={() => openReserve(batch.batch)}>
+                Buy blind
+              </button>
+            {:else if batch.state === "RANDOMNESS_FIXED"}
+              <button class="tiny" onclick={() => openAssign(batch)}>Assignments</button>
+            {/if}
           </div>
         {/each}
       </div>
@@ -120,6 +147,11 @@
 {#if reserveBatch}
   <ReserveBlindPurchaseDialog bind:open={showReserve} batch={reserveBatch} />
 {/if}
-{#if resolvePurchase}
-  <ResolveBlindAssignmentDialog bind:open={showResolve} purchase={resolvePurchase} />
+{#if assignBatch && assignBatch.close && assignBatch.result}
+  <BatchAssignmentsDialog
+    bind:open={showAssign}
+    close={assignBatch.close}
+    result={assignBatch.result}
+    minter={assignBatch.minter}
+  />
 {/if}

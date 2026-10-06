@@ -8,6 +8,7 @@
   import LikeButton from "./LikeButton.svelte";
   import ListingSection from "./ListingSection.svelte";
   import ProvenanceTimeline from "./ProvenanceTimeline.svelte";
+  import GenerativeStatusPanel from "./GenerativeStatusPanel.svelte";
   import RevealFlow from "./RevealFlow.svelte";
   import TransferDialog from "./TransferDialog.svelte";
   import UnytSettleDialog from "./UnytSettleDialog.svelte";
@@ -227,7 +228,11 @@
         <div class="divider"></div>
         <div class="stack tight">
           {#if d.manifest.payload.status === "sealed" && iMinted}
-            <RevealFlow {nft} hasSalt={d.hasSalt} />
+            {#if app.collection?.generation}
+              <GenerativeStatusPanel {nft} />
+            {:else}
+              <RevealFlow {nft} hasSalt={d.hasSalt} />
+            {/if}
           {/if}
           {#if iOwn}
             <div class="row wrap" style="gap: 0.5rem">

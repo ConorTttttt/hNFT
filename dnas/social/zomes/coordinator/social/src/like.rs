@@ -29,7 +29,12 @@ pub fn like(input: LikeTargetInput) -> ExternResult<()> {
         return Ok(());
     }
     let tag = LinkTag::new(input.target_role.into_bytes());
-    create_link(me.clone(), input.target.clone(), LinkTypes::AgentToLiked, tag)?;
+    create_link(
+        me.clone(),
+        input.target.clone(),
+        LinkTypes::AgentToLiked,
+        tag,
+    )?;
     create_link(input.target, me, LinkTypes::TargetToLikers, ())?;
     Ok(())
 }

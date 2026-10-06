@@ -2252,6 +2252,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "happ_tests"
+version = "0.0.1"
+dependencies = [
+ "holochain",
+ "holochain_serialized_bytes",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4841,6 +4852,7 @@ dependencies = [
  "hdi",
  "holochain_serialized_bytes",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

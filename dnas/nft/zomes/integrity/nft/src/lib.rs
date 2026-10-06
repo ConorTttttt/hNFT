@@ -1,17 +1,28 @@
 pub mod agreement;
 pub mod blind_collection;
+pub mod canonical;
 pub mod dna_properties;
+pub mod generation;
+pub mod generation_randomness;
+pub mod generation_record;
 pub mod links;
 pub mod listing;
 pub mod nft_manifest;
+pub mod randomness;
+pub mod randomness_verifier;
 pub mod transfer;
 
 pub use agreement::*;
 pub use blind_collection::*;
 pub use dna_properties::*;
+pub use generation::*;
+pub use generation_randomness::*;
+pub use generation_record::*;
 pub use links::*;
 pub use listing::*;
 pub use nft_manifest::*;
+pub use randomness::*;
+pub use randomness_verifier::*;
 pub use transfer::*;
 
 use hdi::prelude::*;
@@ -32,8 +43,14 @@ pub enum EntryTypes {
     Listing(Listing),
     BlindBatchCommitment(BlindBatchCommitment),
     BlindPurchaseCommitment(BlindPurchaseCommitment),
-    BlindAssignmentReveal(BlindAssignmentReveal),
+    InventoryFinalized(InventoryFinalized),
+    BatchClose(BatchClose),
+    RandomnessResult(RandomnessResult),
     BlindPurchaseAbandoned(BlindPurchaseAbandoned),
+    /// G2. Appended last so existing entry-type indices are unchanged.
+    GenerationRecord(GenerationRecord),
+    /// G5a: verified per-NFT randomness for generative collections.
+    GenerationRandomness(GenerationRandomness),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -73,10 +90,51 @@ pub enum LinkTypes {
     /// BlindBatchCommitment action -> BlindPurchaseCommitment action. The
     /// minter's discovery of purchases against their own batch.
     BatchToPurchase,
+    /// G2. NftManifest original action -> GenerationRecord action. (0 or 1.)
+    NftToGeneration,
+    /// G3a discovery only (validators never enumerate links):
+    /// batch -> InventoryFinalized.
+    BatchToInventory,
+    /// batch -> BatchClose.
+    BatchToClose,
+    /// BatchClose -> RandomnessResult.
+    CloseToResult,
+    /// G5a discovery only: NftManifest original action -> GenerationRandomness.
+    NftToGenerationRandomness,
 }
 
 #[hdk_extern]
 pub fn genesis_self_check(_data: GenesisSelfCheckData) -> ExternResult<ValidateCallbackResult> {
+    // Refuse to create a cell whose generative config is invalid. (Local
+    // self-check only; peers re-check at record/reveal time in `validate`.)
+    if let Ok(props) = CollectionProperties::get() {
+        if let Some(id) = props.collection_id.as_ref() {
+            if let Err(e) = canonical::parse_hex32(id) {
+                return Ok(ValidateCallbackResult::Invalid(format!(
+                    "invalid collection_id: {e}"
+                )));
+            }
+        }
+        if let Some(spec) = props.randomness.as_ref() {
+            if let Err(e) = spec.validate() {
+                return Ok(ValidateCallbackResult::Invalid(e));
+            }
+        }
+        if props.generation.is_some()
+            && (props.collection_id.is_none() || props.randomness.is_none())
+        {
+            return Ok(ValidateCallbackResult::Invalid(
+                "a generative collection requires collection_id and randomness".into(),
+            ));
+        }
+        if let Some(cfg) = props.generation {
+            if let Err(e) = cfg.validate() {
+                return Ok(ValidateCallbackResult::Invalid(format!(
+                    "invalid generation config: {e}"
+                )));
+            }
+        }
+    }
     Ok(ValidateCallbackResult::Valid)
 }
 
@@ -107,10 +165,14 @@ fn validate_create_entry(
         EntryTypes::BlindPurchaseCommitment(e) => {
             validate_create_blind_purchase_commitment(action, e)
         }
-        EntryTypes::BlindAssignmentReveal(e) => validate_create_blind_assignment_reveal(action, e),
+        EntryTypes::InventoryFinalized(e) => validate_create_inventory_finalized(action, e),
+        EntryTypes::BatchClose(e) => validate_create_batch_close(action, e),
+        EntryTypes::RandomnessResult(e) => validate_create_randomness_result(action, e),
+        EntryTypes::GenerationRandomness(e) => validate_create_generation_randomness(action, e),
         EntryTypes::BlindPurchaseAbandoned(e) => {
             validate_create_blind_purchase_abandoned(action, e)
         }
+        EntryTypes::GenerationRecord(e) => validate_create_generation_record(action, e),
     }
 }
 
@@ -176,9 +238,7 @@ fn validate_create_link(
         LinkTypes::AgentToNft => validate_create_link_agent_to_nft(action),
         LinkTypes::NftToAgreement => validate_create_link_nft_to_agreement(action),
         LinkTypes::NftToRevealDefault => validate_create_link_nft_to_reveal_default(action),
-        LinkTypes::AgentToDelegatedReveal => {
-            validate_create_link_agent_to_delegated_reveal(action)
-        }
+        LinkTypes::AgentToDelegatedReveal => validate_create_link_agent_to_delegated_reveal(action),
         LinkTypes::PathToListing | LinkTypes::AgentToListing => {
             validate_create_link_to_listing(action)
         }
@@ -188,6 +248,13 @@ fn validate_create_link(
         LinkTypes::ListingToInterested => validate_create_link_listing_to_interested(action),
         LinkTypes::PathToBlindBatch => validate_create_link_path_to_blind_batch(action),
         LinkTypes::BatchToPurchase => validate_create_link_batch_to_purchase(action),
+        LinkTypes::NftToGeneration => validate_create_link_nft_to_generation(action),
+        LinkTypes::BatchToInventory => validate_create_link_batch_to_inventory(action),
+        LinkTypes::BatchToClose => validate_create_link_batch_to_close(action),
+        LinkTypes::CloseToResult => validate_create_link_close_to_result(action),
+        LinkTypes::NftToGenerationRandomness => {
+            validate_create_link_nft_to_generation_randomness(action)
+        }
     }
 }
 
@@ -215,7 +282,13 @@ fn validate_delete_link(
         | LinkTypes::ListingUpdates
         | LinkTypes::AgentToInterest
         | LinkTypes::ListingToInterested => validate_delete_link_permanent(action, original_action),
-        LinkTypes::PathToBlindBatch | LinkTypes::BatchToPurchase => {
+        LinkTypes::PathToBlindBatch
+        | LinkTypes::BatchToPurchase
+        | LinkTypes::NftToGeneration
+        | LinkTypes::BatchToInventory
+        | LinkTypes::BatchToClose
+        | LinkTypes::CloseToResult
+        | LinkTypes::NftToGenerationRandomness => {
             validate_delete_link_permanent(action, original_action)
         }
     }
@@ -236,8 +309,7 @@ pub fn validate(op: Op) -> ExternResult<ValidateCallbackResult> {
             _ => Ok(ValidateCallbackResult::Valid),
         },
         FlatOp::Delete(OpDelete { action }) => {
-            let original_record =
-                must_get_valid_record(action.data.deletes_address.clone())?;
+            let original_record = must_get_valid_record(action.data.deletes_address.clone())?;
             let original_action = TypedAction::<EntryCreationData>::try_from_action(
                 original_record.action().clone(),
             )?;
@@ -263,8 +335,7 @@ pub fn validate(op: Op) -> ExternResult<ValidateCallbackResult> {
                 app_entry, action, ..
             } => validate_register_update(app_entry, action),
             OpRecord::DeleteEntry { action, .. } => {
-                let original_record =
-                    must_get_valid_record(action.data.deletes_address.clone())?;
+                let original_record = must_get_valid_record(action.data.deletes_address.clone())?;
                 let original_action = TypedAction::<EntryCreationData>::try_from_action(
                     original_record.action().clone(),
                 )?;
@@ -300,7 +371,8 @@ pub fn validate(op: Op) -> ExternResult<ValidateCallbackResult> {
                 let previous_action = must_get_action(prev)?;
                 match &previous_action.action().data {
                     ActionData::AgentValidationPkg(AgentValidationPkgData {
-                        membrane_proof, ..
+                        membrane_proof,
+                        ..
                     }) => validate_agent_joining(agent, membrane_proof),
                     _ => Ok(ValidateCallbackResult::Invalid(
                         "the previous action for a `CreateAgent` must be an `AgentValidationPkg`"

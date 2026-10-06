@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ActionHash } from "@holochain/client";
-  import { NFT_ROLE, type NftView } from "$lib/appState.svelte";
-  import { nftTitle } from "$lib/format";
+  import { NFT_ROLE, useAppState, type NftView } from "$lib/appState.svelte";
+  import { b64, nftTitle } from "$lib/format";
   import AgentBadge from "./AgentBadge.svelte";
   import LikeButton from "./LikeButton.svelte";
   import ListingBadge from "./ListingBadge.svelte";
@@ -18,8 +18,17 @@
     onunhide?: (nft: ActionHash) => void;
   } = $props();
 
+  const app = useAppState();
+
   const payload = $derived(view.manifest.payload);
   const title = $derived(nftTitle(view.manifest));
+  /** From the collection-wide `allListings()` set once loaded (no per-card
+   * query); `undefined` until then, which makes `ListingBadge` look it up. */
+  const listing = $derived(
+    app.listingsLoaded ? (app.listingByNft.get(b64(view.nft)) ?? null) : undefined,
+  );
+  const generative = $derived(!!app.collection?.generation);
+  const blind = $derived(!!view.manifest.batch);
   let imgOk = $state(true);
 
   function toggleHide(e: MouseEvent) {
@@ -30,8 +39,10 @@
 
 <div
   class="card"
+  class:listed={!!listing}
   role="button"
   tabindex="0"
+  aria-label={`Open ${title}${listing ? " (for sale)" : ""}`}
   onclick={() => onopen(view.nft)}
   onkeydown={(e) => (e.key === "Enter" || e.key === " ") && onopen(view.nft)}
 >
@@ -57,12 +68,18 @@
   <div class="body">
     <div class="row between">
       <strong class="truncate">{title}</strong>
-      <span class="pill {payload.status}">{payload.status}</span>
+      <span class="pill {payload.status}">
+        {payload.status === "sealed" ? "unrevealed" : "revealed"}
+      </span>
     </div>
-    <ListingBadge nft={view.nft} />
+    <div class="row wrap" style="gap: 0.3rem">
+      <ListingBadge nft={view.nft} {listing} />
+      {#if generative}<span class="pill cyan">generative</span>{/if}
+      {#if blind}<span class="pill warn">blind box</span>{/if}
+    </div>
     <div class="row between">
       <AgentBadge agent={view.minter} size={18} />
-      {#if payload.status === "sealed" && !view.hasSalt}
+      {#if payload.status === "sealed" && !view.hasSalt && !generative}
         <span class="pill danger" title="reveal salt not on this device">no salt</span>
       {/if}
     </div>
@@ -73,6 +90,9 @@
 </div>
 
 <style>
+  .card.listed {
+    border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+  }
   .thumb-wrap {
     position: relative;
   }

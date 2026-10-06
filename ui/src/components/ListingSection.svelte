@@ -110,12 +110,13 @@
       <div class="row wrap" style="gap: 0.5rem; align-items: center">
         <span class="pill listed">for sale · {listing.price} {listing.currency}</span>
         <button class="primary tiny" onclick={interested} disabled={interestBusy}>
-          {interestBusy ? "…" : "I'm interested"}
+          {interestBusy ? "…" : "Express interest"}
         </button>
       </div>
       <p class="faint small">
-        This records your interest and notifies the seller — they'll send you
-        a transfer offer if they choose to sell to you.
+        Express interest to let the seller know you want this NFT. The seller can
+        then choose to send you a transfer offer, which you accept from Activity.
+        This is not an instant purchase.
       </p>
     {:else if iOwn}
       <div class="row wrap" style="gap: 0.5rem; align-items: center">

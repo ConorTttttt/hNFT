@@ -25,13 +25,22 @@ pub fn create_listing(input: CreateListingInput) -> ExternResult<Record> {
         )));
     }
 
-    let listing = Listing { nft: input.nft.clone(), price: input.price, currency: input.currency };
+    let listing = Listing {
+        nft: input.nft.clone(),
+        price: input.price,
+        currency: input.currency,
+    };
     let hash = create_entry(&EntryTypes::Listing(listing))?;
 
     create_link(input.nft, hash.clone(), LinkTypes::NftToListing, ())?;
     create_link(me, hash.clone(), LinkTypes::AgentToListing, ())?;
     let path = Path::from(LISTINGS_PATH);
-    create_link(path.path_entry_hash()?, hash.clone(), LinkTypes::PathToListing, ())?;
+    create_link(
+        path.path_entry_hash()?,
+        hash.clone(),
+        LinkTypes::PathToListing,
+        (),
+    )?;
 
     get(hash, GetOptions::default())?.ok_or(wasm_error!(WasmErrorInner::Guest(
         "newly created Listing not found".into()
@@ -62,7 +71,11 @@ pub fn update_listing_price(input: UpdateListingInput) -> ExternResult<Record> {
             "target is not a Listing".into()
         )))?;
 
-    let listing = Listing { nft: existing.nft, price: input.price, currency: input.currency };
+    let listing = Listing {
+        nft: existing.nft,
+        price: input.price,
+        currency: input.currency,
+    };
     let updated_hash = update_entry(input.previous_action_hash.clone(), &listing)?;
     create_link(
         input.previous_action_hash,
@@ -181,7 +194,9 @@ pub fn all_listings(_: ()) -> ExternResult<Vec<ListingView>> {
     )?;
     let mut out = Vec::new();
     for link in links {
-        let Some(hash) = link.target.into_action_hash() else { continue };
+        let Some(hash) = link.target.into_action_hash() else {
+            continue;
+        };
         if let Some(view) = active_listing_view(hash)? {
             out.push(view);
         }
@@ -198,7 +213,9 @@ pub fn my_listings(_: ()) -> ExternResult<Vec<ListingView>> {
     )?;
     let mut out = Vec::new();
     for link in links {
-        let Some(hash) = link.target.into_action_hash() else { continue };
+        let Some(hash) = link.target.into_action_hash() else {
+            continue;
+        };
         if let Some(view) = active_listing_view(hash)? {
             out.push(view);
         }
@@ -225,9 +242,18 @@ pub fn express_interest(listing: ActionHash) -> ExternResult<()> {
         )))?;
 
     create_link(me.clone(), listing.clone(), LinkTypes::AgentToInterest, ())?;
-    create_link(listing.clone(), me.clone(), LinkTypes::ListingToInterested, ())?;
+    create_link(
+        listing.clone(),
+        me.clone(),
+        LinkTypes::ListingToInterested,
+        (),
+    )?;
     let _ = send_remote_signal(
-        RemoteSignal::ListingInterest { listing, nft: entry.nft, buyer: me },
+        RemoteSignal::ListingInterest {
+            listing,
+            nft: entry.nft,
+            buyer: me,
+        },
         vec![seller],
     );
     Ok(())
@@ -245,4 +271,3 @@ pub fn interested_buyers(listing: ActionHash) -> ExternResult<Vec<AgentPubKey>> 
         .filter_map(|l| l.target.into_agent_pub_key())
         .collect())
 }
-

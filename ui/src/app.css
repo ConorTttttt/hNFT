@@ -455,6 +455,13 @@ dialog::backdrop {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 999px;
+  /* Keep every tab on one line and reachable (scroll, not wrap-into-a-mess)
+     when there isn't room for all of them — e.g. the 6-item collection tab
+     bar on a narrow window. Native focus scrolling keeps this keyboard-usable
+     without any JS. */
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .nav button {
   border: none;
@@ -464,6 +471,8 @@ dialog::backdrop {
   color: var(--text-dim);
   font-weight: 500;
   position: relative;
+  flex: none;
+  white-space: nowrap;
 }
 .nav button.active {
   background: var(--accent);

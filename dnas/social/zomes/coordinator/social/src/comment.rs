@@ -18,7 +18,12 @@ pub fn create_comment(input: CreateCommentInput) -> ExternResult<Record> {
         body: input.body,
     };
     let comment_hash = create_entry(&EntryTypes::Comment(comment))?;
-    create_link(input.target, comment_hash.clone(), LinkTypes::TargetToComment, ())?;
+    create_link(
+        input.target,
+        comment_hash.clone(),
+        LinkTypes::TargetToComment,
+        (),
+    )?;
     create_link(me, comment_hash.clone(), LinkTypes::AgentToComment, ())?;
     get(comment_hash, GetOptions::default())?.ok_or(wasm_error!(WasmErrorInner::Guest(
         "newly created Comment not found".into()

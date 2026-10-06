@@ -10,7 +10,10 @@ async fn follow_and_unfollow_updates_both_indexes() {
     let (conductors, cells) = setup(2).await;
     let (za, zb) = (cells[0].zome(ZOME), cells[1].zome(ZOME));
     let (ca, cb) = (conductors.get(0).unwrap(), conductors.get(1).unwrap());
-    let (ka, kb) = (cells[0].agent_pubkey().clone(), cells[1].agent_pubkey().clone());
+    let (ka, kb) = (
+        cells[0].agent_pubkey().clone(),
+        cells[1].agent_pubkey().clone(),
+    );
 
     let _: () = ca.call(&za, "follow", kb.clone()).await;
     await_consistency(&cells).await.unwrap();
@@ -47,7 +50,10 @@ async fn only_the_follower_can_unfollow() {
     let (conductors, cells) = setup(2).await;
     let (za, zb) = (cells[0].zome(ZOME), cells[1].zome(ZOME));
     let (ca, cb) = (conductors.get(0).unwrap(), conductors.get(1).unwrap());
-    let (ka, kb) = (cells[0].agent_pubkey().clone(), cells[1].agent_pubkey().clone());
+    let (ka, kb) = (
+        cells[0].agent_pubkey().clone(),
+        cells[1].agent_pubkey().clone(),
+    );
 
     let _: () = ca.call(&za, "follow", kb.clone()).await;
     await_consistency(&cells).await.unwrap();
@@ -59,7 +65,11 @@ async fn only_the_follower_can_unfollow() {
     await_consistency(&cells).await.unwrap();
 
     let a_following: Vec<AgentPubKey> = ca.call(&za, "following", ka).await;
-    assert_eq!(a_following, vec![kb], "only Alice's own unfollow may remove her edge");
+    assert_eq!(
+        a_following,
+        vec![kb],
+        "only Alice's own unfollow may remove her edge"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -102,14 +112,20 @@ async fn likes_for_counts_and_reflects_me() {
         .call(
             &za,
             "like",
-            LikeTargetInput { target: target.clone(), target_role: "nft.0".into() },
+            LikeTargetInput {
+                target: target.clone(),
+                target_role: "nft.0".into(),
+            },
         )
         .await;
     let _: () = cb
         .call(
             &zb,
             "like",
-            LikeTargetInput { target: target.clone(), target_role: "nft.0".into() },
+            LikeTargetInput {
+                target: target.clone(),
+                target_role: "nft.0".into(),
+            },
         )
         .await;
     await_consistency(&cells).await.unwrap();

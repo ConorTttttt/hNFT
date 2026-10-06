@@ -42,12 +42,7 @@ pub fn mark_reveal_default(nft: ActionHash) -> ExternResult<Record> {
         nft: nft.clone(),
         agreement: ag_hash,
     }))?;
-    create_link(
-        nft,
-        default_hash.clone(),
-        LinkTypes::NftToRevealDefault,
-        (),
-    )?;
+    create_link(nft, default_hash.clone(), LinkTypes::NftToRevealDefault, ())?;
     get(default_hash, GetOptions::default())?.ok_or(wasm_error!(WasmErrorInner::Guest(
         "newly created RevealDefault not found".into()
     )))

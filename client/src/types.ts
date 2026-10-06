@@ -15,10 +15,116 @@ export interface CollectionInfo {
   name: string;
   symbol: string;
   max_supply: number;
-  /** base64 AgentPubKey, or `null` for open (dev) minting. */
+  /** base64 AgentPubKey, or `null` for open (dev) minting. Ignored once
+   * `whitelist` is non-empty — see `mintPolicyOf`. */
   minter_pubkey: string | null;
   royalty_bps: number;
   transfer_window_secs: number;
+  /** Seconds before anyone may flag a blind purchase abandoned (UI-only signal). */
+  blind_resolution_window_secs?: number;
+  /** 64 lowercase hex chars (32 bytes); the stable collection namespace. Required for blind batches. */
+  collection_id?: string | null;
+  /** Randomness provider config. `dev-insecure` is the INSECURE dev verifier. */
+  randomness?: RandomnessSpec | null;
+  /** Generative trait configuration. `null`/absent = not a generative collection. */
+  generation?: GenerationConfig | null;
+  /** Per-agent mint whitelist (Phase J.1). `null`/absent/`[]` = whitelist mode
+   * is off — `minter_pubkey` behaves as before. Non-empty = WHITELIST mode:
+   * `minter_pubkey` is no longer consulted for mint authorization. Immutable
+   * for the collection's lifetime, same as every other field here — see
+   * `mintPolicyOf`. */
+  whitelist?: WhitelistEntry[] | null;
+}
+
+/** One whitelist entry, as `CollectionProperties.whitelist` carries it. */
+export interface WhitelistEntry {
+  /** Base64 `AgentPubKey`. */
+  agent: string;
+  /** Lifetime mint cap for this agent. Must be `>= 1`. */
+  allowance: number;
+}
+
+/** This collection's mint-authorization mode — derived, never sent as-is;
+ * see `mintPolicyOf`. Mirrors the Rust `MintMode`/`MintPolicyView`. */
+export type MintPolicy = "public" | "creator_only" | "whitelist";
+
+/** From `mint_status()` — the connected agent's authoritative mint
+ * eligibility/progress under this collection's active policy. A read-only
+ * reflection: the integrity validator reaches `eligible`'s answer
+ * independently at mint time. */
+export interface MintStatus {
+  policy: MintPolicy;
+  eligible: boolean;
+  /** This agent's own lifetime mint count in this collection. */
+  minted_by_me: number;
+  /** This agent's personal cap, when one applies to them — `null` under
+   * PUBLIC, for a non-creator under CREATOR_ONLY, or for an agent absent
+   * from the whitelist under WHITELIST. */
+  my_allowance: number | null;
+}
+
+// --- G5a: generative NFTs -----------------------------------------------------
+//
+// See `dnas/nft/zomes/integrity/nft/src/generation.rs`,
+// `generation_randomness.rs`, `generation_record.rs`, and
+// `docs/generative-collections.md`. The seed is always DERIVED from verified
+// randomness; there is no seed input anywhere in this API. The only randomness
+// provider that exists is `dev-insecure`, which is forgeable/development-only.
+
+export const INSECURE_DEV_PROVIDER_ID = "dev-insecure";
+
+export interface RandomnessSpec {
+  provider_id: string;
+  verifier_params: string;
+}
+
+export interface TraitOption {
+  id: string;
+  display_name: string;
+  weight: number;
+}
+
+export interface TraitCategory {
+  id: string;
+  display_name: string;
+  traits: TraitOption[];
+}
+
+export interface GenerationConfig {
+  generation_version: number;
+  categories: TraitCategory[];
+}
+
+export interface GeneratedTrait {
+  category_id: string;
+  trait_id: string;
+}
+
+export interface GeneratedTraits {
+  generation_version: number;
+  traits: GeneratedTrait[];
+}
+
+/** The `GenerationRandomness` entry as it decodes off the wire. */
+export interface GenerationRandomness {
+  nft: ActionHash;
+  provider_id: string;
+  /** MessagePack array of ints on the wire. */
+  event_id: number[];
+  /** 32 bytes, MessagePack array of ints on the wire. */
+  randomness: number[];
+  /** MessagePack array of ints on the wire. */
+  proof: number[];
+}
+
+/** The `GenerationRecord` entry as it decodes off the wire. */
+export interface GenerationRecord {
+  nft: ActionHash;
+  generation_version: number;
+  /** 32 bytes, MessagePack array of ints on the wire. */
+  seed: number[];
+  generated_traits: GeneratedTraits;
+  randomness: { kind: "verified"; result: ActionHash };
 }
 
 /** Discriminated on `status` (Rust `#[serde(tag = "status", rename_all = "snake_case")]`). */
@@ -38,6 +144,10 @@ export interface NftManifest {
   /** 32-byte blake2b commitment, MessagePack array of ints on the wire. */
   metadata_hash: number[];
   payload: NftPayload;
+  /** The blind batch this NFT was minted into (G3a), if any. */
+  batch?: ActionHash | null;
+  /** Its slot within that batch, if any. */
+  batch_slot?: number | null;
 }
 
 export interface TransferCommitment {
@@ -122,54 +232,56 @@ export interface ListingView {
 
 /** The `BlindBatchCommitment` entry as it decodes off the wire (`decodeEntry`). */
 export interface BlindBatchCommitment {
+  /** N — the committed inventory size (protocol max 1024; the UI offers at most 256). */
   batch_size: number;
-  /** 32 bytes, MessagePack array of ints on the wire. */
-  seed_hash: number[];
+  /** Advisory only. Never used by validation to close or release anything. */
+  sale_window_secs: number;
+  assignment_algorithm_version: number;
 }
 
 /** The `BlindPurchaseCommitment` entry as it decodes off the wire (`decodeEntry`). */
 export interface BlindPurchaseCommitment {
   batch: ActionHash;
-  /** 32 bytes, MessagePack array of ints on the wire. */
-  nonce_hash: number[];
-  /** Opaque to the client — never decrypt or interpret this here. */
-  encrypted_nonce: number[];
+  /** The batch's `InventoryFinalized` action. */
+  inventory: ActionHash;
 }
 
+/** Result of the composite `NftClient.mintBlindBatch` (create + chunked mint + finalize). */
 export interface MintBlindBatchOutput {
   batch: ActionHash;
   /** Sealed mint action hashes, in slot order (`nfts[i]` is slot `i`). */
   nfts: ActionHash[];
+  /** The `InventoryFinalized` action — the authoritative slot → NFT binding. */
+  inventory: ActionHash;
 }
 
 export interface ReserveBlindPurchaseOutput {
   purchase: ActionHash;
-  /**
-   * Generated and returned by the zome call itself — NOT generated
-   * client-side. The buyer's client must hold onto this (same as a reveal
-   * salt) to be able to confirm the eventual `BlindAssignmentReveal`
-   * matches what they actually committed to. There is no way to recover
-   * it later — only its hash is ever committed on-chain.
-   */
-  buyerNonce: Uint8Array;
 }
 
-export interface ResolveBlindAssignmentInput {
+/**
+ * DRAFT → SALES_OPEN → CLOSED → RANDOMNESS_FIXED. ASSIGNED, TRANSFERRED and
+ * REVEALED are derived per NFT, not per batch.
+ */
+export type BatchState = "DRAFT" | "SALES_OPEN" | "CLOSED" | "RANDOMNESS_FIXED";
+
+export interface BatchStateView {
+  state: BatchState;
+  batch_size: number;
+  inventory?: ActionHash | null;
+  close?: ActionHash | null;
+  result?: ActionHash | null;
+}
+
+/** One purchase's deterministic assignment (derived; there is no assignment entry). */
+export interface AssignmentView {
   purchase: ActionHash;
-  /** The minter's own secret for this batch — 32 bytes. */
-  mintSeed: Uint8Array;
-  /** Audit-trail hash, same role as in `initiate_transfer_from_rave`. */
-  rave: ActionHash;
-  fulfilled: boolean;
-  nftId: string;
-  newOwner: string;
-  previousOwner: string;
-}
-
-export interface ResolveBlindAssignmentOutput {
-  reveal: ActionHash;
-  assignedNft: ActionHash;
-  commitment: ActionHash;
+  buyer: AgentPubKey;
+  /** Position of the purchase in the close's sorted list. */
+  position: number;
+  slot: number;
+  /** `InventoryFinalized.nfts[slot]`. */
+  nft: ActionHash;
 }
 
 // --- coordinator I/O ------------------------------------------------------------

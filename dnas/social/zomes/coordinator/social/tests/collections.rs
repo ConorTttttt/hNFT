@@ -16,7 +16,10 @@ async fn create_update_delete_collection_author_only() {
         .call(
             &za,
             "create_collection",
-            CreateCollectionInput { name: "Favorites".into(), description: "".into() },
+            CreateCollectionInput {
+                name: "Favorites".into(),
+                description: "".into(),
+            },
         )
         .await;
     await_consistency(&cells).await.unwrap();
@@ -34,7 +37,10 @@ async fn create_update_delete_collection_author_only() {
             },
         )
         .await;
-    assert!(bad_update.is_err(), "only the curator may edit their collection");
+    assert!(
+        bad_update.is_err(),
+        "only the curator may edit their collection"
+    );
 
     // Alice can.
     let updated: Record = ca
@@ -56,8 +62,13 @@ async fn create_update_delete_collection_author_only() {
     let _ = updated;
 
     // Bob cannot delete it either.
-    let bad_delete: Result<(), _> = cb.call_fallible(&zb, "delete_collection", hash.clone()).await;
-    assert!(bad_delete.is_err(), "only the curator may delete their collection");
+    let bad_delete: Result<(), _> = cb
+        .call_fallible(&zb, "delete_collection", hash.clone())
+        .await;
+    assert!(
+        bad_delete.is_err(),
+        "only the curator may delete their collection"
+    );
 
     let _: () = ca.call(&za, "delete_collection", hash).await;
 }
@@ -73,7 +84,10 @@ async fn add_and_remove_item_curator_only() {
         .call(
             &za,
             "create_collection",
-            CreateCollectionInput { name: "Wall".into(), description: "".into() },
+            CreateCollectionInput {
+                name: "Wall".into(),
+                description: "".into(),
+            },
         )
         .await;
     await_consistency(&cells).await.unwrap();
@@ -84,7 +98,11 @@ async fn add_and_remove_item_curator_only() {
         .call_fallible(
             &zb,
             "add_to_collection",
-            AddToCollectionInput { collection: collection.clone(), target: item.clone(), target_role: "nft.1".into() },
+            AddToCollectionInput {
+                collection: collection.clone(),
+                target: item.clone(),
+                target_role: "nft.1".into(),
+            },
         )
         .await;
     assert!(bad_add.is_err(), "only the curator may add items");
@@ -93,7 +111,11 @@ async fn add_and_remove_item_curator_only() {
         .call(
             &za,
             "add_to_collection",
-            AddToCollectionInput { collection: collection.clone(), target: item.clone(), target_role: "nft.1".into() },
+            AddToCollectionInput {
+                collection: collection.clone(),
+                target: item.clone(),
+                target_role: "nft.1".into(),
+            },
         )
         .await;
     await_consistency(&cells).await.unwrap();
@@ -107,7 +129,10 @@ async fn add_and_remove_item_curator_only() {
         .call_fallible(
             &zb,
             "remove_from_collection",
-            RemoveFromCollectionInput { collection: collection.clone(), target: item.clone() },
+            RemoveFromCollectionInput {
+                collection: collection.clone(),
+                target: item.clone(),
+            },
         )
         .await;
     assert!(bad_remove.is_err(), "only the curator may remove items");
@@ -116,7 +141,10 @@ async fn add_and_remove_item_curator_only() {
         .call(
             &za,
             "remove_from_collection",
-            RemoveFromCollectionInput { collection: collection.clone(), target: item },
+            RemoveFromCollectionInput {
+                collection: collection.clone(),
+                target: item,
+            },
         )
         .await;
     await_consistency(&cells).await.unwrap();
@@ -127,18 +155,40 @@ async fn add_and_remove_item_curator_only() {
 #[tokio::test(flavor = "multi_thread")]
 async fn all_collections_visible_to_third_party() {
     let (conductors, cells) = setup(3).await;
-    let (za, zb, zc) = (cells[0].zome(ZOME), cells[1].zome(ZOME), cells[2].zome(ZOME));
+    let (za, zb, zc) = (
+        cells[0].zome(ZOME),
+        cells[1].zome(ZOME),
+        cells[2].zome(ZOME),
+    );
     let (ca, cb) = (conductors.get(0).unwrap(), conductors.get(1).unwrap());
 
     let a: Record = ca
-        .call(&za, "create_collection", CreateCollectionInput { name: "A's list".into(), description: "".into() })
+        .call(
+            &za,
+            "create_collection",
+            CreateCollectionInput {
+                name: "A's list".into(),
+                description: "".into(),
+            },
+        )
         .await;
     let b: Record = cb
-        .call(&zb, "create_collection", CreateCollectionInput { name: "B's list".into(), description: "".into() })
+        .call(
+            &zb,
+            "create_collection",
+            CreateCollectionInput {
+                name: "B's list".into(),
+                description: "".into(),
+            },
+        )
         .await;
     await_consistency(&cells).await.unwrap();
 
-    let all: Vec<Record> = conductors.get(2).unwrap().call(&zc, "all_collections", ()).await;
+    let all: Vec<Record> = conductors
+        .get(2)
+        .unwrap()
+        .call(&zc, "all_collections", ())
+        .await;
     let hashes: Vec<ActionHash> = all.iter().map(|r| r.action_address().clone()).collect();
     assert!(hashes.contains(a.action_address()));
     assert!(hashes.contains(b.action_address()));

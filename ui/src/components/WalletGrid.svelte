@@ -2,6 +2,7 @@
   import { useAppState } from "$lib/appState.svelte";
   import { b64 } from "$lib/format";
   import DraftShelf from "./DraftShelf.svelte";
+  import GenerativeDraftShelf from "./GenerativeDraftShelf.svelte";
   import NftCard from "./NftCard.svelte";
 
   let { onmint }: { onmint: () => void } = $props();
@@ -13,10 +14,14 @@
 </script>
 
 <div class="stack" style="gap: 1.25rem">
-  <DraftShelf />
+  {#if app.collection?.generation}
+    <GenerativeDraftShelf />
+  {:else}
+    <DraftShelf />
+  {/if}
 
   <h3>
-    My Collection {#if visible.length}<span class="faint">· {visible.length}</span>{/if}
+    My NFTs {#if visible.length}<span class="faint">· {visible.length}</span>{/if}
   </h3>
 
   {#if visible.length}
@@ -42,9 +47,14 @@
         Mint an NFT of your own, or wait for a transfer to arrive.
       </span>
       <div class="actions">
-        <button class="primary" onclick={onmint}>Mint your first NFT</button>
+        <button
+          class="primary"
+          onclick={() => (app.collection?.generation ? app.mintGenerative() : onmint())}
+        >
+          Mint your first NFT
+        </button>
         <button class="secondary" onclick={() => app.openDiscover()}>
-          Explore peer network
+          Browse items
         </button>
       </div>
     </div>

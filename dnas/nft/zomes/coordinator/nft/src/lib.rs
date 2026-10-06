@@ -1,5 +1,6 @@
 pub mod agreement;
 pub mod blind;
+pub mod generation;
 pub mod listing;
 pub mod mint;
 pub mod payment;

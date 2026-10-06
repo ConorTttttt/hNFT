@@ -1,5 +1,7 @@
 use crate::agreement::MintAgreement;
-use crate::dna_properties::CollectionProperties;
+use crate::blind_collection::validate_manifest_batch_fields;
+use crate::dna_properties::{CollectionProperties, MintMode};
+use crate::generation_record::validate_generated_reveal;
 use crate::UnitEntryTypes;
 use hdi::prelude::*;
 
@@ -97,49 +99,103 @@ pub fn validate_create_nft_manifest(
 ) -> ExternResult<ValidateCallbackResult> {
     let props = CollectionProperties::get()?;
 
-    // 1. Minter authority (progenitor pattern). `None` => dev mode, no restriction.
-    if let Some(minter_str) = props.minter_pubkey.as_ref() {
-        let minter = AgentPubKey::try_from(minter_str.clone())
-            .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("bad minter_pubkey: {e:?}"))))?;
-        if action.author() != &minter {
-            return Ok(ValidateCallbackResult::Invalid(
-                "only the collection minter may mint".into(),
-            ));
+    // 1. Mint authorization + per-authority supply cap (progenitor pattern,
+    //    generalized in Phase J.1 to a per-agent whitelist — see
+    //    `CollectionProperties::mint_mode`'s doc comment for the invariants
+    //    this relies on).
+    match props.mint_mode()? {
+        MintMode::Public => {
+            // No author restriction. `max_supply` is deliberately NOT
+            // enforced here: with an unbounded set of legal minters there is
+            // no race-free way to count "total minted so far" from any
+            // single agent's chain (Phase 5 audit §B) — unchanged from prior
+            // behavior.
+        }
+        MintMode::CreatorOnly(minter) => {
+            if action.author() != &minter {
+                return Ok(ValidateCallbackResult::Invalid(
+                    "only the collection minter may mint".into(),
+                ));
+            }
+            // max_supply. Enforceable only because a single minter's own source
+            // chain is strictly ordered by construction — no network race is
+            // possible against yourself. See `count_prior_manifest_mints`.
+            if props.max_supply > 0 {
+                let minted_so_far = count_prior_manifest_mints(&action)?;
+                if minted_so_far >= props.max_supply {
+                    return Ok(ValidateCallbackResult::Invalid(
+                        "collection max_supply reached".into(),
+                    ));
+                }
+            }
+        }
+        MintMode::Whitelist(entries) => {
+            let allowance = entries
+                .iter()
+                .find(|(agent, _)| agent == action.author())
+                .map(|(_, allowance)| *allowance);
+            let Some(allowance) = allowance else {
+                return Ok(ValidateCallbackResult::Invalid(
+                    "this agent is not on the collection's mint whitelist".into(),
+                ));
+            };
+            // Same single-chain-walk primitive as CREATOR_ONLY's max_supply
+            // check, applied to this agent's own chain instead of a single
+            // fixed minter's — sound for the same reason (own chain, strictly
+            // ordered). The AGGREGATE max_supply across the whole whitelist is
+            // NOT independently re-checked here: `mint_mode()` already refused
+            // to resolve a whitelist whose allowances sum above `max_supply`,
+            // which is what makes the aggregate cap safe here — a load-time
+            // guarantee on the fixed allowance table, not a runtime race
+            // across agents (Phase 5 audit §E; there is no such race-free
+            // mechanism in this protocol for independent agents' chains).
+            let minted_so_far = count_prior_manifest_mints(&action)?;
+            if minted_so_far >= allowance {
+                return Ok(ValidateCallbackResult::Invalid(
+                    "this agent has reached their whitelist mint allowance".into(),
+                ));
+            }
         }
     }
 
     // 2. Must mint Sealed, with a real commitment.
     if !matches!(nft.payload, NftPayload::Sealed) {
-        return Ok(ValidateCallbackResult::Invalid("NFT must be minted Sealed".into()));
+        return Ok(ValidateCallbackResult::Invalid(
+            "NFT must be minted Sealed".into(),
+        ));
     }
     if nft.metadata_hash == [0u8; 32] {
-        return Ok(ValidateCallbackResult::Invalid("metadata_hash must not be zero".into()));
+        return Ok(ValidateCallbackResult::Invalid(
+            "metadata_hash must not be zero".into(),
+        ));
     }
 
-    // 3. max_supply. Enforceable only because a single minter's own source chain is
-    //    strictly ordered by construction — no network race is possible against
-    //    yourself. Walk the minter's chain from this mint's predecessor and count
-    //    prior NftManifest creates. `must_get_agent_activity` DEFERS on an
-    //    incomplete chain (UnresolvedDependencies) rather than failing, so
-    //    validators converge; a forked minter chain produces a warrant.
-    if props.minter_pubkey.is_some() && props.max_supply > 0 {
-        let prev = action
-            .prev_action()
-            .ok_or_else(|| wasm_error!(WasmErrorInner::Guest("mint has no prev_action".into())))?
-            .clone();
-        let activity = must_get_agent_activity(action.author().clone(), ChainFilter::new(prev))?;
-        let minted_so_far = activity
-            .iter()
-            .filter(|a| is_nft_manifest_create(a.action.action()))
-            .count() as u32;
-        if minted_so_far >= props.max_supply {
-            return Ok(ValidateCallbackResult::Invalid(
-                "collection max_supply reached".into(),
-            ));
-        }
+    // 2b. Batch membership (G3a): batch and batch_slot travel together and the
+    //     batch must be a real BlindBatchCommitment by this same author.
+    match validate_manifest_batch_fields(action.author(), &nft.batch, &nft.batch_slot)? {
+        ValidateCallbackResult::Valid => {}
+        other => return Ok(other),
     }
 
     Ok(ValidateCallbackResult::Valid)
+}
+
+/// Count `NftManifest` creates already on `action`'s own author's chain, prior
+/// to `action` itself. `must_get_agent_activity` DEFERS on an incomplete chain
+/// (`UnresolvedDependencies`) rather than failing, so validators converge; a
+/// forked author chain produces a warrant instead of a bypass. Shared by both
+/// CREATOR_ONLY's `max_supply` check and WHITELIST's per-agent allowance check
+/// — same primitive, same guarantees, applied to whichever agent is minting.
+fn count_prior_manifest_mints(action: &TypedAction<EntryCreationData>) -> ExternResult<u32> {
+    let prev = action
+        .prev_action()
+        .ok_or_else(|| wasm_error!(WasmErrorInner::Guest("mint has no prev_action".into())))?
+        .clone();
+    let activity = must_get_agent_activity(action.author().clone(), ChainFilter::new(prev))?;
+    Ok(activity
+        .iter()
+        .filter(|a| is_nft_manifest_create(a.action.action()))
+        .count() as u32)
 }
 
 /// Reveal: the sole permitted update to an `NftManifest`.
@@ -194,7 +250,9 @@ pub fn validate_update_nft_manifest(
     }
     // Branching a reveal off an already-revealed manifest.
     if !matches!(original_nft.payload, NftPayload::Sealed) {
-        return Ok(ValidateCallbackResult::Invalid("NFT already revealed".into()));
+        return Ok(ValidateCallbackResult::Invalid(
+            "NFT already revealed".into(),
+        ));
     }
     // Branching a second reveal directly off the sealed mint. The author's own
     // chain is strictly ordered, so a prior Update targeting this same mint
@@ -209,7 +267,9 @@ pub fn validate_update_nft_manifest(
     for a in activity.iter() {
         if let ActionData::Update(u) = &a.action.action().data {
             if u.original_action_address == mint_hash {
-                return Ok(ValidateCallbackResult::Invalid("NFT already revealed".into()));
+                return Ok(ValidateCallbackResult::Invalid(
+                    "NFT already revealed".into(),
+                ));
             }
         }
     }
@@ -239,6 +299,19 @@ pub fn validate_update_nft_manifest(
             "an update must reveal, not stay Sealed".into(),
         ));
     };
+    // Generative collections (G2): the traits cannot be committed at mint time
+    // because they don't exist until the seed is fixed, so the preimage check
+    // below cannot apply. Instead the reveal must equal `generate(config, seed)`
+    // for the minter's immutable `GenerationRecord`. NOTE: `image_uri` and
+    // `salt` are then NOT bound by any commitment.
+    if let Some(cfg) = CollectionProperties::get()?.generation {
+        if action.author() != original_action.author() {
+            return Ok(ValidateCallbackResult::Invalid(
+                "only the minter may reveal a generative NFT".into(),
+            ));
+        }
+        return validate_generated_reveal(&cfg, &mint_hash, &activity, attributes);
+    }
     let computed = commit_hash(&reveal_preimage(&salt, attributes, image_uri));
     if computed != nft.metadata_hash {
         return Ok(ValidateCallbackResult::Invalid(

@@ -39,7 +39,10 @@ async fn comment_create_and_delete() {
     // resolves to nothing app-decodable — comments_for still returns the
     // link's target hash resolution as a None, filtered out by the batch get.
     let children_after: Vec<Record> = cb.call(&zb, "comments_for", target).await;
-    assert!(children_after.is_empty(), "a deleted comment must not resolve");
+    assert!(
+        children_after.is_empty(),
+        "a deleted comment must not resolve"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -53,7 +56,11 @@ async fn only_author_can_delete_comment() {
         .call(
             &za,
             "create_comment",
-            CreateCommentInput { target, target_role: "nft.2".into(), body: "hi".into() },
+            CreateCommentInput {
+                target,
+                target_role: "nft.2".into(),
+                body: "hi".into(),
+            },
         )
         .await;
     await_consistency(&cells).await.unwrap();
@@ -86,7 +93,11 @@ async fn comments_for_lists_only_direct_children() {
         .call(
             &z,
             "create_comment",
-            CreateCommentInput { target: top_hash.clone(), target_role: "".into(), body: "a reply".into() },
+            CreateCommentInput {
+                target: top_hash.clone(),
+                target_role: "".into(),
+                body: "a reply".into(),
+            },
         )
         .await;
 
@@ -94,7 +105,11 @@ async fn comments_for_lists_only_direct_children() {
     assert_eq!(direct.len(), 1, "only the top-level comment, not the reply");
 
     let replies: Vec<Record> = c.call(&z, "comments_for", top_hash).await;
-    assert_eq!(replies.len(), 1, "the reply is a direct child of the comment it replies to");
+    assert_eq!(
+        replies.len(),
+        1,
+        "the reply is a direct child of the comment it replies to"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -108,7 +123,11 @@ async fn reply_target_can_be_a_comment() {
         .call(
             &z,
             "create_comment",
-            CreateCommentInput { target, target_role: "nft.2".into(), body: "top".into() },
+            CreateCommentInput {
+                target,
+                target_role: "nft.2".into(),
+                body: "top".into(),
+            },
         )
         .await;
     let top_hash: AnyLinkableHash = top.action_address().clone().into();
@@ -117,8 +136,15 @@ async fn reply_target_can_be_a_comment() {
         .call_fallible(
             &z,
             "create_comment",
-            CreateCommentInput { target: top_hash, target_role: "".into(), body: "re".into() },
+            CreateCommentInput {
+                target: top_hash,
+                target_role: "".into(),
+                body: "re".into(),
+            },
         )
         .await;
-    assert!(reply.is_ok(), "a Comment's own action hash is a valid target");
+    assert!(
+        reply.is_ok(),
+        "a Comment's own action hash is a valid target"
+    );
 }

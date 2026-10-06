@@ -1,161 +1,136 @@
-# Blind-box collection sales
+# Blind fixed-inventory batches (G3a)
 
-Randomly-assigned NFT collection batches, settled via Unyt the same way
-single-item sales are (see `HANDOFF.md`'s original Unyt bridge). Implemented
-in `dnas/nft/zomes/integrity/nft/src/blind_collection.rs` (validation) and
-`dnas/nft/zomes/coordinator/nft/src/blind.rs` (externs).
+A minter commits a **fixed inventory** of sealed NFTs. Buyers reserve purchases. After the minter closes the batch, randomness decides **which committed NFTs are sold** and **which purchase receives which NFT**. Traits and artwork stay concealed (sealed commit-reveal) until the assigned NFT is revealed.
 
-## Mechanism, in one pass
+This is the only blind protocol. It replaces the earlier `mint_seed` / `buyer_nonce` / `BlindAssignmentReveal` design, which was order-dependent and is gone (no migration: the DNA hash changed).
 
-1. **Mint.** The minter calls `mint_blind_batch` with `metadata_hashes[]` (one
-   commitment per slot, in slot order) and a secret `mint_seed`. This mints a
-   `BlindBatchCommitment { batch_size, seed_hash }` plus `batch_size` Sealed
-   `NftManifest`s, each tagged `batch` + a sequential `batch_slot`. Which real
-   attributes go with which slot is implicit in this ordering — never written
-   down anywhere `validate()` can see.
-2. **Reserve.** A buyer calls `reserve_blind_purchase(batch)` before knowing
-   anything about assignment. This generates a random `buyer_nonce`,
-   encrypts it to the minter's X25519 key (see "Nonce delivery" below), and
-   commits to `nonce_hash = commit_hash(buyer_nonce)` on-chain. The buyer's
-   own client is responsible for holding onto the returned `buyer_nonce` —
-   same pattern as a reveal salt.
-3. **Payment** settles via Unyt's `nft_sale_escrow` template, same as an
-   ordinary sale. `nft_id` for a blind purchase is the
-   `BlindPurchaseCommitment`'s own action hash, not an NFT hash — nobody
-   knows which NFT this resolves to yet.
-4. **Resolve.** The minter calls `resolve_blind_assignment_from_rave` with
-   the claimed settlement fields (same demo trust model as `payment.rs` —
-   trusted, not re-verified against Unyt) plus `mint_seed`. This decrypts
-   and checks `buyer_nonce`, computes the assigned slot
-   (`blind_collection::resolve_slot` — never reimplemented coordinator-side),
-   writes a `BlindAssignmentReveal`, and offers the resolved NFT via the
-   existing `TransferCommitment` flow with `blind_reveal` set.
-5. **Accept.** The buyer calls the existing `accept_transfer` — unchanged.
+It is separate from *open generative collections* (randomness determines traits; see [generative-collections.md](generative-collections.md)). A collection cannot be both: a batch NFT in a collection with `generation` set is rejected.
 
-## What this does and does not claim
+> **The only randomness verifier is `dev-insecure`, which is insecure by design.** It accepts a public, forgeable "proof" and exists only to exercise the protocol. No production randomness provider has been chosen or implemented; see [randomness-verification.md](randomness-verification.md) for the verification boundary.
 
-Pre-purchase prediction/steering (a minter tipping off a friend "buy now" to
-land a chosen slot) is closed: the slot depends on the buyer's own secret
-nonce, not just purchase order, and the buyer commits to (and pays for) that
-nonce before learning anything about assignment.
+Code: `dnas/nft/zomes/integrity/nft/src/blind_collection.rs` (protocol, validators, pure functions), `randomness.rs` (`RandomnessSpec`, `RandomnessResult`, its validator, generation seed), `randomness_verifier.rs` (verification boundary), `canonical.rs`; coordinator `dnas/nft/zomes/coordinator/nft/src/blind.rs`.
 
-**Two things this demo does NOT close** — both accepted as stated trust
-assumptions for this pass, not fixed:
+## N and K
 
-- **Resolution order.** The minter can compute `resolve_slot` themselves
-  before deciding whether to write a given `BlindAssignmentReveal`, and
-  controls the order purchases resolve in — which, in a linear-probe
-  collision, can steer the final assignment. A closed-batch redesign
-  (collect all purchases, close the batch, resolve everything in one
-  deterministic pass) would remove this, but was explicitly deferred for
-  this demo (see decision log below).
-- **Resolution liveness.** A minter who dislikes a resolved slot can simply
-  never write the reveal. `BlindPurchaseAbandoned` lets anyone flag a
-  purchase as unresolved past its deadline (`blind_resolution_window_secs`),
-  but **this is a UI-only signal in this implementation** — nothing on-chain
-  consumes it. The UI should watch for a `BlindPurchaseAbandoned` referencing
-  one of the buyer's own purchases and surface "unresolved, contact seller."
-  **There is no refund/dispute mechanism**: this DNA has no way to claw back
-  a Unyt payment, and a compromised/unresponsive minter leaves the buyer
-  with a paid-for purchase and no assigned NFT. A real recovery path (likely
-  spanning this DNA and the Unyt side) is unimplemented follow-up work, not
-  a bug in what's here.
+- **N** = committed inventory size (`batch_size`, `1 ≤ N ≤ 1024`).
+- **K** = purchases included in the `BatchClose`, with **`1 ≤ K ≤ N`**.
 
-## Decision log for this pass
+Example: `N = 10`, `K = 7`. Seven of the ten committed NFTs are selected at random and assigned at random to the seven purchases. The other three stay locked.
 
-- **Resolution order:** accepted as a trust assumption (not the closed-batch
-  redesign) — matches this demo's existing minter-trust model elsewhere.
-- **Resolution liveness:** UI-only signal, no dispute/refund path.
-- **Minter X25519 key discovery:** baked into `CollectionProperties.minter_x25519_pubkey`
-  (hex-encoded), generated once via the `generate_minter_x25519_pubkey` extern
-  and pasted into `dna.yaml` before the collection's DNA is created — same
-  pre-cell-creation step as choosing `minter_pubkey`.
+## Lifecycle and objects
 
-## Nonce delivery
+```text
+BlindBatchCommitment            batch_id = its Create ActionHash
+  └─ N sealed NftManifest        (batch = batch_id, batch_slot = i)
+       └─ InventoryFinalized     nfts[i] == the NFT for slot i
+            └─ BlindPurchaseCommitment × any   (cite the finalization)
+                 └─ BatchClose       (minter; sorted purchase hashes; 1 ≤ K ≤ N)
+                      └─ RandomnessResult    (bound to the close; anyone may author)
+                           └─ deterministic partial Fisher–Yates   (derived; no entry)
+                                └─ BatchRelease in the first TransferCommitment
+                                     └─ TransferReceipt ── Reveal
+```
 
-`reserve_blind_purchase` generates a one-time X25519 keypair for the buyer
-(`create_x25519_keypair`), box-encrypts `buyer_nonce` to the minter's
-published `minter_x25519_pubkey`, and stores both the ciphertext and the
-buyer's ephemeral sender pubkey in `BlindPurchaseCommitment.encrypted_nonce`
-(opaque to `validate()` — only length-bounded there). `resolve_blind_assignment_from_rave`
-decrypts it with the matching secret held in the minter's own lair keystore.
+The batch commitment cannot contain NFT hashes (the NFTs do not exist yet), so the binding is two-stage: batch → sealed NFTs → `InventoryFinalized`. Purchases cite the finalization, so no purchase can exist before the inventory is fixed.
 
-## Batch/purchase discovery
+| State | Meaning | Entry or derived |
+|---|---|---|
+| DRAFT | batch exists, inventory not finalized | derived |
+| SALES_OPEN | `InventoryFinalized` exists | entry, then derived |
+| CLOSED | `BatchClose` exists | entry |
+| RANDOMNESS_FIXED | a valid `RandomnessResult` for the close exists | entry |
+| ASSIGNED | assignment is computable | **derived only** (no assignment entry) |
+| TRANSFERRED | first transfer used a valid `BatchRelease` | existing transfer entries |
+| REVEALED | sealed → revealed update | existing reveal |
 
-Neither a batch nor a purchase against it was discoverable by anything
-other than an out-of-band-shared `ActionHash` in the first pass of this
-design — no `PathToNft`-equivalent existed for `BlindBatchCommitment`, and
-the minter had no way to see purchases reserved against their own batch.
-Two new permanent link types close this, mirroring existing patterns
-exactly:
+Discovery links (`PathToBlindBatch`, `BatchToPurchase`, `BatchToInventory`, `BatchToClose`, `CloseToResult`) exist for the coordinator and client only. **Validation never enumerates links**; it works from directly referenced records and deterministic computation.
 
-- `PathToBlindBatch` (`Path("collection.all")` -> batch) — global batch
-  discovery, same role as `PathToNft`. Created by `mint_blind_batch`,
-  read by `get_all_blind_batches`.
-- `BatchToPurchase` (batch -> purchase) — the minter's resolution queue,
-  same role as `NftToListing`. Created by `reserve_blind_purchase` (which
-  also sends a best-effort `BlindPurchaseReserved` remote signal to the
-  minter, mirroring `ListingInterest`), read by `purchases_for_batch`.
-- `resolved_purchases_for_batch` — an own-chain scan (same technique as
-  `taken_slots_for_batch`) so a UI can filter already-resolved purchases
-  out of the minter's queue instead of leaving them there forever.
+## What is validated
 
-## Grouping a batch into a Collection
+- **`BlindBatchCommitment`**: minter authority; `1 ≤ batch_size ≤ 1024`; `assignment_algorithm_version == 1`; valid `collection_id`; no `generation` config. `sale_window_secs` is **advisory only** and never used by validation.
+- **`NftManifest` with a batch**: `batch` and `batch_slot` both set or both unset; the batch exists and is a `BlindBatchCommitment`; same author; `slot < batch_size`; sealed; non-zero metadata hash; collection not generative. Mint-time uniqueness is *not* attempted: a twin NFT for a slot can be minted but is never usable.
+- **`InventoryFinalized`**: author is the batch author; `nfts.len() == batch_size`; all NFT hashes distinct; each is the **original Create** (not an Update) of a sealed manifest by the same author, in this batch, at that index, with non-zero metadata hash; the digest recomputes; and no earlier finalization for this batch exists **on the author's own chain**.
+- **`BlindPurchaseCommitment`** `{batch, inventory}`: the inventory is a valid finalization of that batch. Any agent may purchase, several times.
+- **`BatchClose`**: author is the batch author; `1 ≤ K ≤ N`; purchase hashes strictly ascending by raw 39-byte `ActionHash` (so no duplicates); each purchase exists and cites this batch and inventory; no earlier close on the author's chain. **No timestamps.**
+- **`RandomnessResult`**: bounds (`provider_id ≤ 64`, `event_id ≤ 64`, `proof ≤ 4096`); validation then runs the verification boundary (provider identity, binding to the close, provider proof; see [randomness-verification.md](randomness-verification.md)). Anyone may author one.
+- **First transfer of a batch NFT**: `batch_release` is **mandatory** (and forbidden for non-batch NFTs). Validation reconstructs NFT → batch/slot → `InventoryFinalized` (must list this NFT at that slot) → `BatchClose` → `RandomnessResult` (bound to the close) → assignment → purchase, and requires `to_agent == purchase author`. Ordinary `initiate_transfer` of a batch NFT is rejected.
 
-`MintBlindBatchDialog` can optionally add every minted NFT to a social
-Collection (the "Collections" tab — `SocialClient`'s `createCollection`/
-`addToCollection`) — a separate, curated grouping from the single DNA-cell
-collection every NFT here already belongs to by construction (every item
-in one `mint_blind_batch` call already shares one cell and one `batch`
-hash; that grouping needs no extra code). `AppState.mintBlindBatch`'s
-`group` argument either creates a new Collection for the batch or adds to
-an existing one; a failure here is reported as its own toast and doesn't
-undo the mint, since the batch is already real either way.
+## What this does and does not guarantee
 
-## UI (`ui/src/components/MintBlindBatchDialog.svelte`, `ReserveBlindPurchaseDialog.svelte`, `ResolveBlindAssignmentDialog.svelte`, `BlindBoxesView.svelte`)
+- The close **commits one immutable purchase set**. It does **not** prove every economically eligible purchase was included: purchases live on independent buyer chains and validators cannot enumerate the DHT. **The minter controls the authoritative close and can omit purchases.** Payment and refund consequences are deferred.
+- Once the randomness result is fixed, **the assignment cannot be changed**: it is a pure function of the committed inventory, the sorted purchases and the randomness. Resolution order has no effect.
+- Uniqueness of the finalization and of the close holds on an **honest linear minter chain**. A forked author chain can present two of them: Holochain 0.7 defines a `ChainFork` warrant to detect this, but validating one branch cannot see the other.
+- **No timestamps** are used to close a batch or release an NFT. Action timestamps are author-asserted (Holochain only requires them to be non-decreasing on a chain), so they are not a consensus input here.
+- **Unselected inventory** (`N − K` NFTs) has no release path in G3a and stays locked. Recovery of unsold inventory, and of batches that never close, is deferred.
+- The minter can also pad a batch with purchases from other keys; purchases are free at the protocol level.
+- Provider non-equivocation (one result per close) is a provider property. Several valid `RandomnessResult` entries for one close can exist when authored by different agents; the validator does not enforce uniqueness across authors.
 
-Follows the existing patterns exactly: `NftClient` methods in
-`client/src/client.ts`, action-wrapper methods on `AppState`
-(`ui/src/lib/appState.svelte.ts`), `<dialog>` components. `BlindBoxesView.svelte`
-is a new top-level nav tab ("Blind boxes") listing every discoverable
-batch, the calling agent's own batches, and — for a minter — their
-resolution queue, wired to the three dialogs above. The
-`generate_minter_x25519_pubkey` bootstrap step lives in
-`ui/src/setup/GenerateMinterKey.svelte`, deliberately outside the main
-app's routing — it's a one-time, pre-DNA-creation step, not a runtime
-action any collection's UI should expose.
+## Canonical hashing (frozen)
 
-**Storage gap, same category as "Resolution liveness" above, at the UI
-layer instead of the protocol layer:** `mint_seed` (minter) and
-`buyer_nonce` (buyer) have no durable storage in this implementation
-beyond `sessionStorage`, because there is no on-chain way to recover
-either — only their hashes are ever committed. This is fine for a demo
-running start-to-finish in one browser tab, and a real gap otherwise: a
-minter who reloads their tab can no longer resolve any purchase against
-that batch; a buyer who reserves on one device can't complete resolution
-verification from another, or after closing the tab. A production version
-needs durable, backed-up client-side storage for both secrets — same
-category as `saltStore.ts`'s reveal commitments, which already solves this
-problem for ordinary mints and should likely be extended to cover these
-too rather than inventing a second storage mechanism.
+All G3 hashes are blake2b-256 over `put(tag) ‖ u32_le(version) ‖ fields`, where `put(x) = u32_le(len(x)) ‖ x`, integers are little-endian, and an `ActionHash` is its raw 39 bytes. (The G1 category roll in `generation.rs` predates this form and is frozen separately.)
 
-## Known test gaps
+```text
+inventory leaf   put("hnft.inventory.leaf") ‖ u32 1 ‖ collection_id[32] ‖ batch[39]
+                 ‖ u32 slot ‖ nft[39] ‖ metadata_hash[32]
+inventory digest put("hnft.inventory.digest") ‖ u32 1 ‖ collection_id[32] ‖ batch[39]
+                 ‖ u32 N ‖ leaf_0 ‖ … ‖ leaf_{N-1}
+assignment seed  put("hnft.assignment.seed") ‖ u32 1 ‖ collection_id[32] ‖ batch[39]
+                 ‖ close[39] ‖ put(provider_id) ‖ put(event_id) ‖ randomness[32]
+generation seed  put("hnft.generation.seed") ‖ u32 1 ‖ collection_id[32] ‖ nft[39]
+                 ‖ u32 generation_version ‖ put(provider_id) ‖ put(event_id) ‖ randomness[32]
+```
 
-`coordinator/nft/tests/blind.rs` covers the happy path, duplicate-purchase
-rejection, batch-exhaustion rejection, and batch/purchase discovery
-(`get_all_blind_batches`, `purchases_for_batch`, `resolved_purchases_for_batch`).
-It does **not** cover the two
-adversarial cases `blind_collection.rs`'s own test-priority notes call for
-(colluding minter+buyer pre-purchase prediction; minter post-nonce
-withholding) — both need a way to author a raw, off-protocol entry bypassing
-`resolve_blind_assignment_from_rave`'s own bookkeeping, which this demo's
-coordinator API doesn't expose. Flagged here rather than skipped silently.
+`collection_id` is an explicit stable namespace: **64 lowercase hex characters** in DNA properties, decoding to exactly 32 bytes. It is not the DNA hash (which changes on migration).
 
-## Scale caveat
+### Assignment (algorithm version 1)
 
-`validate_create_blind_assignment_reveal` walks the minter's own chain
-(`must_get_agent_activity`) to reconstruct which slots are taken — O(k) work
-per reveal, paid by every validating peer, k = purchases already resolved in
-the batch. Fine at a ~100-item demo batch; a redesign (a minter-signed
-running commitment `validate()` checks against instead of replaying the
-whole chain) is needed before this goes to a ~10,000-item target.
+1. Word stream: `word_j = u64_le(blake2b_256(assignment_seed ‖ u32_le(j))[0..8])`. `j` advances on **every** draw, including rejected ones.
+2. `uniform(m)`: `m == 1` returns 0 without drawing; otherwise draw until `word < 2^64 − (2^64 mod m)`, then return `word mod m` (no modulo bias).
+3. Partial Fisher–Yates over `[0, N)`: `perm = [0..N)`; for `j` in `0..K`, `r = j + uniform(N − j)`, swap `perm[j]`, `perm[r]`; the purchase at sorted position `j` gets slot `perm[j]`.
+
+Positions are the sorted purchase order, so the result is injective, exactly `K` NFTs are selected, and the slot at position `j` does not depend on `K`.
+
+### Golden vectors
+
+Computed independently with Python `hashlib.blake2b(digest_size=32)` and pinned in the Rust tests. Synthetic inputs: `collection_id = 0xC0 × 32`; batch = `84 29 24 ‖ 0xB0×32 ‖ 00 00 00 01`; NFT *i* = `84 29 24 ‖ (0xA0+i)×32 ‖ 00 00 00 i`; metadata *i* = `(0x30+i)×32`.
+
+| Vector | Value |
+|---|---|
+| leaf, slot 0 | `473ac37f6831f7bad8bc0f2dac4f409422a1c7744b81a4047e1f6da82db01b98` |
+| leaf, slot 1 | `7aae4e39becebe53bac972d923789b2da2c386b8ff6ba792a01869b5062f6e94` |
+| digest, N = 2 | `5761aa62285638f6a9fe55c610ddc648bd84276635fa92a7b9136d1a7050a78c` |
+| digest, N = 1 | `d4d4f4c6a51caa85b4017a9c1b2b7cb6df081fedde62cdfe930aab413e984a29` |
+| assignment seed | `fb7e64d9aa2fe672ae3fc9316b32f41d8e43e25263753cf030f8ce2a8c30b568` |
+| slots, N = 5, K = 3 | `[4, 0, 3]` |
+| slots, N = 5, K = 5 | `[4, 0, 3, 1, 2]` |
+| generation seed | `a74698536ffcad8661ecd13bc4fae8371370c2fb9a56e22a7b8885d7fcd7937c` |
+
+The assignment and generation vectors use `close = 84 29 24 ‖ 0xD0×32 ‖ 00 00 00 02`, `provider_id = "dev-test"`, `event_id = "event-1"`, `randomness = 0x5A × 32`; the generation seed uses NFT *0* and `generation_version = 1`.
+
+## Randomness verification boundary (G4)
+
+Acceptance of a `RandomnessResult` goes through a provider-independent boundary (`randomness_verifier.rs`): `verifier_for(provider_id)` selects a verifier, which deterministically checks the proof and the binding to the close and returns a typed result (`InsecureDev` or `ProviderVerified`) or a typed error. Validation performs no network access. Only `dev-insecure` is registered (`InsecureDev`, not production-grade). G4 changed no entry or property schema and did not choose a production provider. Full description: [randomness-verification.md](randomness-verification.md).
+
+## Configuration
+
+```yaml
+properties:
+  collection_id: "<64 lowercase hex chars>"     # required for blind batches
+  randomness:
+    provider_id: "dev-insecure"                  # dev/test only
+    verifier_params: ""
+```
+
+`genesis_self_check` rejects an invalid `collection_id` or `RandomnessSpec`.
+
+## Batch size
+
+The protocol maximum is `MAX_BATCH_SIZE = 1024` (a full inventory list of about 43 KB, against Holochain's 4 MB entry limit). The UI and coordinator default to **≤ 256**, and CI tests use small batches. Validation of a finalization and of a close each fetch up to N records; that cost was **not measured at N = 1024**, so measure it before raising operational defaults. Merkle commitments are not used in v1.
+
+## UI
+
+`BlindBoxesView` lists batches with their derived state. A minter can close a batch, record **dev** randomness (labelled insecure), and release assigned NFTs; buyers can reserve a purchase and see the assignment. `mint_seed`, `buyer_nonce`, the minter X25519 key setup page and the resolve dialog were removed.
+
+## Deferred
+
+A production randomness provider and its proof verifier (the verification boundary exists; no real provider is registered); payment escrow, atomicity and refunds; buyer-pull transfer; recovery of unsold or never-closed batches; blind-generative secrecy; Merkle scaling; media binding.

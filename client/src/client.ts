@@ -13,15 +13,18 @@ import type {
   DelegatedRevealView,
   ListingView,
   LocalSignal,
+  AssignmentView,
+  BatchStateView,
+  GenerationRandomness,
+  GenerationRecord,
   MintBlindBatchOutput,
   MintNftOutput,
+  MintStatus,
   NftAttribute,
   NftManifest,
   ProvenanceHop,
   RemoteSignal,
   ReserveBlindPurchaseOutput,
-  ResolveBlindAssignmentInput,
-  ResolveBlindAssignmentOutput,
 } from "./types.js";
 
 export interface NftClientOptions {
@@ -71,6 +74,12 @@ export class NftClient {
   /** May the connected agent mint in this collection? */
   isMinter(): Promise<boolean> {
     return this.call("is_minter", null);
+  }
+
+  /** The connected agent's authoritative mint eligibility/policy/allowance
+   * progress (Phase J.2) — a superset of `isMinter()`. */
+  mintStatus(): Promise<MintStatus> {
+    return this.call("mint_status", null);
   }
 
   /** Mint a sealed NFT for a commitment computed with `prepareCommitment`. */
@@ -147,6 +156,92 @@ export class NftClient {
       salt: c.salt,
       attributes: c.attributes,
       imageUri: c.imageUri,
+    });
+  }
+
+  // --- G5a: generative NFTs -------------------------------------------------
+  //
+  // The seed is always DERIVED from verified randomness (`generation_seed(...)`
+  // in `randomness.rs`) — there is no seed input anywhere here. The only
+  // provider is `dev-insecure`: forgeable, development/testing only, never
+  // production-grade. See `docs/generative-collections.md`.
+
+  /**
+   * The dev-insecure proof for `(nft, eventId, randomness)` under this
+   * collection's `RandomnessSpec`. Public and forgeable by design — exists only
+   * to exercise the protocol.
+   */
+  devGenerationRandomnessProof(
+    nft: ActionHash,
+    eventId: Uint8Array,
+    randomness: Uint8Array,
+  ): Promise<number[]> {
+    return this.call("dev_generation_randomness_proof", {
+      nft,
+      event_id: Array.from(eventId),
+      randomness: bytes32(randomness),
+    });
+  }
+
+  /**
+   * Record verified randomness for `nft` (minter-only, once per NFT, before any
+   * reveal — enforced by `validate()`). Returns the `GenerationRandomness`
+   * action hash.
+   */
+  createGenerationRandomness(
+    nft: ActionHash,
+    eventId: Uint8Array,
+    randomness: Uint8Array,
+    proof: number[],
+  ): Promise<ActionHash> {
+    return this.call("create_generation_randomness", {
+      nft,
+      event_id: Array.from(eventId),
+      randomness: bytes32(randomness),
+      proof,
+    });
+  }
+
+  /**
+   * Read back the `GenerationRandomness` for `nft`, if any (via its discovery
+   * link), along with its own action hash — needed as
+   * `createGenerationRecord`'s `result` argument.
+   */
+  getGenerationRandomness(
+    nft: ActionHash,
+  ): Promise<[ActionHash, GenerationRandomness] | null> {
+    return this.call("get_generation_randomness", nft);
+  }
+
+  /**
+   * Derive the seed from `result` and record the generated traits. There is no
+   * seed input: the coordinator computes `generation_seed(...)` and `generate(...)`.
+   */
+  createGenerationRecord(nft: ActionHash, result: ActionHash): Promise<HcRecord> {
+    return this.call("create_generation_record", { nft, result });
+  }
+
+  /** Read back the `GenerationRecord` for `nft`, if any. */
+  getGenerationRecord(nft: ActionHash): Promise<GenerationRecord | null> {
+    return this.call("get_generation_record", nft);
+  }
+
+  /**
+   * Reveal a generative NFT with the attributes derived from its
+   * `GenerationRecord` — fails if no record exists. `imageUri` is minter-supplied
+   * and NOT cryptographically bound to the generated traits.
+   */
+  revealGenerated(args: {
+    nft: ActionHash;
+    previousActionHash: ActionHash;
+    salt: Uint8Array;
+    imageUri: string;
+  }): Promise<HcRecord> {
+    return this.call("reveal_generated", {
+      nft: args.nft,
+      previous_action_hash: args.previousActionHash,
+      salt: bytes32(args.salt),
+      image_uri: args.imageUri,
     });
   }
 
@@ -284,104 +379,130 @@ export class NftClient {
       : null;
   }
 
-  // --- blind-box collections ---------------------------------------------
-  // See `blind.rs`. Field shapes here are confirmed against the actual
-  // Rust structs, not inferred from the handoff docs.
+  // --- blind fixed-inventory batches (G3a) ---------------------------------
+  // See `blind.rs` and `docs/blind-box-collections.md`. N = committed inventory
+  // size, K = purchases included in the close, 1 <= K <= N. The randomness
+  // verifier in G3a is DEV-ONLY and INSECURE.
 
   /**
-   * Mint a blind-box batch: `metadataHashes[i]` is the commitment for slot
-   * `i` (computed with `prepareCommitment`, same as an ordinary mint — one
-   * per NFT in the batch). `mintSeed` is the minter's own secret; there is
-   * no on-chain way to recover it, so the caller must hold onto it (keyed
-   * by the returned `batch` hash) until every purchase against this batch
-   * has been resolved.
+   * Create a batch, mint its N sealed NFTs (in chunks), and finalize the
+   * inventory. `metadataHashes[i]` is slot `i`'s reveal commitment (build each
+   * with `prepareCommitment`, exactly as for an ordinary mint). Chunking means a
+   * failure part-way leaves a harmless DRAFT batch.
    */
-  mintBlindBatch(
+  async mintBlindBatch(
     metadataHashes: Uint8Array[],
-    mintSeed: Uint8Array,
+    opts: { saleWindowSecs?: number; chunkSize?: number } = {},
   ): Promise<MintBlindBatchOutput> {
-    return this.call("mint_blind_batch", {
-      metadata_hashes: metadataHashes.map(bytes32),
-      mint_seed: bytes32(mintSeed),
+    const chunk = Math.max(1, Math.min(opts.chunkSize ?? 64, 128));
+    const batch = await this.call<ActionHash>("create_blind_batch", {
+      batch_size: metadataHashes.length,
+      sale_window_secs: opts.saleWindowSecs ?? 0,
     });
+    const nfts: ActionHash[] = [];
+    for (let start = 0; start < metadataHashes.length; start += chunk) {
+      const part = await this.call<ActionHash[]>("mint_batch_nfts", {
+        batch,
+        start_slot: start,
+        metadata_hashes: metadataHashes.slice(start, start + chunk).map(bytes32),
+      });
+      nfts.push(...part);
+    }
+    const inventory = await this.call<ActionHash>("finalize_inventory", batch);
+    return { batch, nfts, inventory };
   }
 
-  /**
-   * Buyer-side: reserve a purchase against a batch. The nonce is generated
-   * AND encrypted to the minter's X25519 key entirely inside this zome
-   * call (HDK's `random_bytes` + `create_x25519_keypair` +
-   * `x_25519_x_salsa20_poly1305_encrypt`) — the caller supplies nothing but
-   * `batch`. The returned `buyerNonce` must be held onto client-side (same
-   * pattern as a reveal salt) — it's the caller's only way to later verify
-   * the eventual `BlindAssignmentReveal` matches what was actually
-   * committed to; there's no way to recover it from chain.
-   */
-  async reserveBlindPurchase(batch: ActionHash): Promise<ReserveBlindPurchaseOutput> {
-    const out = await this.call<{ purchase: ActionHash; buyer_nonce: number[] }>(
-      "reserve_blind_purchase",
-      { batch },
-    );
-    return { purchase: out.purchase, buyerNonce: Uint8Array.from(out.buyer_nonce) };
+  /** Buyer-side: reserve a purchase against a finalized batch. Payment is out of scope. */
+  reserveBlindPurchase(batch: ActionHash): Promise<ReserveBlindPurchaseOutput> {
+    return this.call("reserve_blind_purchase", { batch });
   }
 
-  /** Every blind-box batch ever minted in this collection, any minter.
-   * Discovery only, mirrors `getAllNfts` — `decodeEntry` per item for
-   * `batch_size`/`seed_hash`. */
+  /** Every blind batch ever created in this collection, any minter.
+   * Discovery only — `decodeEntry` per item for `batch_size`. */
   getAllBlindBatches(): Promise<HcRecord[]> {
     return this.call("get_all_blind_batches", null);
   }
 
-  /** Purchases reserved against `batch`, any buyer — the minter's own
-   * resolution queue, mirrors `interestedBuyers`. */
+  /** Purchases discoverable against `batch` — the minter's input to `closeBatch`. */
   purchasesForBatch(batch: ActionHash): Promise<HcRecord[]> {
     return this.call("purchases_for_batch", batch);
   }
 
-  /** Purchases against `batch` the CALLING minter has already resolved —
-   * own-chain scan, only meaningful for the batch's own minter. Lets a UI
-   * filter an already-resolved purchase out of the resolution queue. */
-  resolvedPurchasesForBatch(batch: ActionHash): Promise<ActionHash[]> {
-    return this.call("resolved_purchases_for_batch", batch);
-  }
-
-  /**
-   * Read back a `BlindPurchaseCommitment` — immutable, so (unlike
-   * `getListing`) this is a plain `get`, not an update-chain walk. The
-   * record's own author is the authoritative buyer; `decodeEntry` gets you
-   * `batch`/`nonce_hash`/`encrypted_nonce`.
-   */
+  /** Read back a `BlindPurchaseCommitment`; the record's author is the buyer. */
   getBlindPurchase(purchase: ActionHash): Promise<HcRecord | null> {
     return this.call("get_blind_purchase", purchase);
   }
 
+  /** DRAFT / SALES_OPEN / CLOSED / RANDOMNESS_FIXED, plus the linked entries. */
+  getBatchState(batch: ActionHash): Promise<BatchStateView> {
+    return this.call("get_batch_state", batch);
+  }
+
   /**
-   * Minter-side, demo mode — direct extension of `initiateTransferFromRave`'s
-   * trust model (see its own doc comment): the caller supplies the claimed
-   * settlement fields; this zome does NOT re-verify them against Unyt.
-   * `mintSeed` must be the exact bytes `mintBlindBatch` was called with for
-   * this purchase's batch.
+   * Minter-side: commit the purchase set (1 <= K <= N, sorted) and close the
+   * batch. With no `purchases`, every discoverable purchase is included (an
+   * error if that exceeds N). The minter chooses the set — omission cannot be
+   * prevented by validation.
    */
-  async resolveBlindAssignmentFromRave(
-    input: ResolveBlindAssignmentInput,
-  ): Promise<ResolveBlindAssignmentOutput> {
-    const out = await this.call<{
-      reveal: ActionHash;
-      assigned_nft: ActionHash;
-      commitment: ActionHash;
-    }>("resolve_blind_assignment_from_rave", {
-      purchase: input.purchase,
-      mint_seed: bytes32(input.mintSeed),
-      rave: input.rave,
-      fulfilled: input.fulfilled,
-      nft_id: input.nftId,
-      new_owner: input.newOwner,
-      previous_owner: input.previousOwner,
+  closeBatch(batch: ActionHash, purchases?: ActionHash[]): Promise<ActionHash> {
+    return this.call("close_batch", { batch, purchases: purchases ?? null });
+  }
+
+  /** The proof the INSECURE dev verifier accepts (public, forgeable by design). */
+  async devRandomnessProof(
+    close: ActionHash,
+    eventId: Uint8Array,
+    randomness: Uint8Array,
+  ): Promise<number[]> {
+    return this.call("dev_randomness_proof", {
+      close,
+      event_id: Array.from(eventId),
+      randomness: bytes32(randomness),
     });
-    return {
-      reveal: out.reveal,
-      assignedNft: out.assigned_nft,
-      commitment: out.commitment,
-    };
+  }
+
+  /** Record a randomness result for a close. Anyone may; validation checks the proof. */
+  recordRandomness(
+    close: ActionHash,
+    eventId: Uint8Array,
+    randomness: Uint8Array,
+    proof: number[],
+  ): Promise<ActionHash> {
+    return this.call("record_randomness", {
+      close,
+      event_id: Array.from(eventId),
+      randomness: bytes32(randomness),
+      proof,
+    });
+  }
+
+  /** DEV ONLY: record randomness using the dev proof. Not secure randomness. */
+  async recordDevRandomness(
+    close: ActionHash,
+    eventId: Uint8Array,
+    randomness: Uint8Array,
+  ): Promise<ActionHash> {
+    const proof = await this.devRandomnessProof(close, eventId, randomness);
+    return this.recordRandomness(close, eventId, randomness, proof);
+  }
+
+  /** The full deterministic assignment for a closed batch with randomness. */
+  getAssignments(close: ActionHash, result: ActionHash): Promise<AssignmentView[]> {
+    return this.call("get_assignments", { close, result });
+  }
+
+  /**
+   * Minter-side: first transfer of a batch NFT to its assigned buyer. The
+   * recipient is the purchase's author; validation recomputes the assignment.
+   */
+  async releaseBatchTransfer(input: {
+    nft: ActionHash;
+    close: ActionHash;
+    result: ActionHash;
+    purchase: ActionHash;
+  }): Promise<ActionHash> {
+    const out = await this.call<{ commitment: ActionHash }>("release_batch_transfer", input);
+    return out.commitment;
   }
 
   // --- listings ----------------------------------------------------------

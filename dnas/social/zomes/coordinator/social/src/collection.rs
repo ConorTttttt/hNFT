@@ -21,7 +21,12 @@ pub fn create_collection(input: CreateCollectionInput) -> ExternResult<Record> {
 
     create_link(me, hash.clone(), LinkTypes::AgentToCollection, ())?;
     let path = Path::from(PATH);
-    create_link(path.path_entry_hash()?, hash.clone(), LinkTypes::PathToCollection, ())?;
+    create_link(
+        path.path_entry_hash()?,
+        hash.clone(),
+        LinkTypes::PathToCollection,
+        (),
+    )?;
 
     get(hash, GetOptions::default())?.ok_or(wasm_error!(WasmErrorInner::Guest(
         "newly created Collection not found".into()
@@ -93,7 +98,12 @@ pub struct AddToCollectionInput {
 #[hdk_extern]
 pub fn add_to_collection(input: AddToCollectionInput) -> ExternResult<()> {
     let tag = LinkTag::new(input.target_role.into_bytes());
-    create_link(input.collection, input.target, LinkTypes::CollectionToItem, tag)?;
+    create_link(
+        input.collection,
+        input.target,
+        LinkTypes::CollectionToItem,
+        tag,
+    )?;
     Ok(())
 }
 

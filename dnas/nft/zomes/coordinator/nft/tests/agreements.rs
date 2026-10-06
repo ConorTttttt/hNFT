@@ -57,11 +57,12 @@ async fn mint_with_agreement_creates_it() {
             },
         )
         .await;
-    assert!(minted.agreement.is_some(), "output carries the agreement hash");
+    assert!(
+        minted.agreement.is_some(),
+        "output carries the agreement hash"
+    );
 
-    let view: Option<AgreementView> = ca
-        .call(&alice, "agreement_for", minted.nft.clone())
-        .await;
+    let view: Option<AgreementView> = ca.call(&alice, "agreement_for", minted.nft.clone()).await;
     let view = view.expect("agreement_for returns the agreement");
     assert_eq!(view.reveal_by_micros, reveal_by);
     assert_eq!(view.default_after_micros, default_after);
@@ -213,7 +214,9 @@ async fn reveal_default_gated_by_deadline() {
 
     // After default_after: accepted.
     tokio::time::sleep(std::time::Duration::from_secs(8)).await;
-    let _: Record = ca.call(&za, "mark_reveal_default", minted.nft.clone()).await;
+    let _: Record = ca
+        .call(&za, "mark_reveal_default", minted.nft.clone())
+        .await;
 
     let view: Option<AgreementView> = ca.call(&za, "agreement_for", minted.nft.clone()).await;
     assert!(view.expect("agreement").defaulted, "now flagged defaulted");
@@ -263,7 +266,13 @@ async fn plain_mint_unchanged() {
 
     let (salt, attributes, image_uri, commitment) = preimage(5);
     let minted: MintNftOutput = c
-        .call(&alice, "mint_nft", MintNftInput { metadata_hash: commitment })
+        .call(
+            &alice,
+            "mint_nft",
+            MintNftInput {
+                metadata_hash: commitment,
+            },
+        )
         .await;
     assert!(minted.agreement.is_none(), "no agreement on a plain mint");
 
@@ -353,7 +362,10 @@ async fn stored_secret_reveal_path() {
     let manifest = NftManifest::try_from(revealed).unwrap();
     match manifest.payload {
         NftPayload::Revealed { agreement, .. } => {
-            assert!(agreement.is_some(), "reveal records the agreement it ran under")
+            assert!(
+                agreement.is_some(),
+                "reveal records the agreement it ran under"
+            )
         }
         _ => panic!("expected Revealed"),
     }

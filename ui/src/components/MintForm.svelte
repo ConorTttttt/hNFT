@@ -10,6 +10,21 @@
 
   const app = useAppState();
 
+  /** Mirrors the authoritative `mint_status()` picture — never a second
+   * authorization decision. If a race lets this warning be stale, the
+   * protocol still rejects the mint and `app.mint`'s error toast surfaces it. */
+  const unavailableReason = $derived.by(() => {
+    if (app.isMinter) return null;
+    const s = app.mintStatus;
+    if (!s) return "This collection restricts who can mint — your mint will be rejected.";
+    if (s.policy === "whitelist") {
+      return s.my_allowance == null
+        ? "You are not on this collection's mint whitelist — your mint will be rejected."
+        : "You've reached your whitelist mint allowance — your mint will be rejected.";
+    }
+    return "This collection restricts minting to its configured minter — your mint will be rejected.";
+  });
+
   let attrs = $state<NftAttribute[]>([
     { trait_type: "name", value: "" },
     { trait_type: "", value: "" },
@@ -58,11 +73,8 @@
 </script>
 
 <div class="stack">
-  {#if !app.isMinter}
-    <p class="small muted">
-      This collection restricts minting to its configured minter — your mint will
-      be rejected.
-    </p>
+  {#if unavailableReason}
+    <p class="small muted">{unavailableReason}</p>
   {/if}
 
   <label class="field">

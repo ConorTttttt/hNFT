@@ -2,11 +2,13 @@ pub mod collection;
 pub mod comment;
 pub mod follow;
 pub mod like;
+pub mod nft_collection_registry;
 
 pub use collection::*;
 pub use comment::*;
 pub use follow::*;
 pub use like::*;
+pub use nft_collection_registry::*;
 
 use hdi::prelude::*;
 
@@ -17,6 +19,7 @@ use hdi::prelude::*;
 pub enum EntryTypes {
     Comment(Comment),
     Collection(Collection),
+    NftCollectionRegistration(NftCollectionRegistration),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -42,6 +45,11 @@ pub enum LinkTypes {
     CollectionUpdates,
     /// Collection action hash -> item AnyLinkableHash. Tag = target_role.
     CollectionToItem,
+    /// registrant AgentPubKey -> NftCollectionRegistration action hash. "My registrations".
+    AgentToNftCollectionRegistration,
+    /// `Path("nft-collections.all")` -> NftCollectionRegistration action hash.
+    /// The network-wide discovery directory (Phase J.3).
+    PathToNftCollectionRegistration,
 }
 
 #[hdk_extern]
@@ -63,16 +71,22 @@ fn validate_create_entry(
     match app_entry {
         EntryTypes::Comment(e) => validate_create_comment(action, e),
         EntryTypes::Collection(e) => validate_create_collection(action, e),
+        EntryTypes::NftCollectionRegistration(e) => {
+            validate_create_nft_collection_registration(action, e)
+        }
     }
 }
 
 /// Only `Collection` may be updated (curator editing name/description);
-/// `Comment` is immutable.
+/// `Comment` and `NftCollectionRegistration` are immutable.
 fn validate_stored_update_entry(app_entry: &EntryTypes) -> ExternResult<ValidateCallbackResult> {
     match app_entry {
         EntryTypes::Collection(_) => Ok(ValidateCallbackResult::Valid),
         EntryTypes::Comment(_) => Ok(ValidateCallbackResult::Invalid(
             "comments are immutable".into(),
+        )),
+        EntryTypes::NftCollectionRegistration(_) => Ok(ValidateCallbackResult::Invalid(
+            "collection registrations are immutable".into(),
         )),
     }
 }
@@ -83,7 +97,7 @@ fn validate_register_update(
 ) -> ExternResult<ValidateCallbackResult> {
     let EntryTypes::Collection(collection) = app_entry else {
         return Ok(ValidateCallbackResult::Invalid(
-            "comments are immutable".into(),
+            "only a Collection may be updated".into(),
         ));
     };
     let original_record = must_get_valid_record(action.data.original_action_address.clone())?;
@@ -106,13 +120,17 @@ fn decode_known_entry(record: &Record) -> ExternResult<EntryTypes> {
     if let Ok(Some(collection)) = record.entry().to_app_option::<Collection>() {
         return Ok(EntryTypes::Collection(collection));
     }
+    if let Ok(Some(reg)) = record.entry().to_app_option::<NftCollectionRegistration>() {
+        return Ok(EntryTypes::NftCollectionRegistration(reg));
+    }
     Err(wasm_error!(WasmErrorInner::Guest(
-        "deleted record is neither a Comment nor a Collection".into()
+        "deleted record is neither a Comment, a Collection, nor an NftCollectionRegistration"
+            .into()
     )))
 }
 
-/// `Comment` and `Collection` are both deletable, author-only; nothing else
-/// in this zome supports delete.
+/// `Comment`, `Collection` and `NftCollectionRegistration` are all
+/// deletable, author-only; nothing else in this zome supports delete.
 fn validate_register_delete(
     action: TypedAction<DeleteData>,
     original_action: TypedAction<EntryCreationData>,
@@ -121,6 +139,9 @@ fn validate_register_delete(
     match original_entry {
         EntryTypes::Comment(_) => validate_delete_comment(action, original_action),
         EntryTypes::Collection(_) => validate_delete_collection(action, original_action),
+        EntryTypes::NftCollectionRegistration(_) => {
+            validate_delete_nft_collection_registration(action, original_action)
+        }
     }
 }
 
@@ -141,6 +162,10 @@ fn validate_create_link(
         }
         LinkTypes::CollectionUpdates => validate_create_link_collection_updates(action),
         LinkTypes::CollectionToItem => validate_create_link_collection_to_item(action),
+        LinkTypes::AgentToNftCollectionRegistration
+        | LinkTypes::PathToNftCollectionRegistration => {
+            validate_create_link_to_nft_collection_registration(action)
+        }
     }
 }
 
@@ -168,6 +193,10 @@ fn validate_delete_link(
         LinkTypes::CollectionToItem => {
             validate_delete_link_collection_to_item(action, original_action)
         }
+        LinkTypes::AgentToNftCollectionRegistration
+        | LinkTypes::PathToNftCollectionRegistration => {
+            validate_delete_link_to_nft_collection_registration(action, original_action)
+        }
     }
 }
 
@@ -186,8 +215,7 @@ pub fn validate(op: Op) -> ExternResult<ValidateCallbackResult> {
             _ => Ok(ValidateCallbackResult::Valid),
         },
         FlatOp::Delete(OpDelete { action }) => {
-            let original_record =
-                must_get_valid_record(action.data.deletes_address.clone())?;
+            let original_record = must_get_valid_record(action.data.deletes_address.clone())?;
             let original_action = TypedAction::<EntryCreationData>::try_from_action(
                 original_record.action().clone(),
             )?;
@@ -210,8 +238,7 @@ pub fn validate(op: Op) -> ExternResult<ValidateCallbackResult> {
                 app_entry, action, ..
             } => validate_register_update(app_entry, action),
             OpRecord::DeleteEntry { action, .. } => {
-                let original_record =
-                    must_get_valid_record(action.data.deletes_address.clone())?;
+                let original_record = must_get_valid_record(action.data.deletes_address.clone())?;
                 let original_action = TypedAction::<EntryCreationData>::try_from_action(
                     original_record.action().clone(),
                 )?;
@@ -245,7 +272,8 @@ pub fn validate(op: Op) -> ExternResult<ValidateCallbackResult> {
                 let previous_action = must_get_action(prev)?;
                 match &previous_action.action().data {
                     ActionData::AgentValidationPkg(AgentValidationPkgData {
-                        membrane_proof, ..
+                        membrane_proof,
+                        ..
                     }) => validate_agent_joining(agent, membrane_proof),
                     _ => Ok(ValidateCallbackResult::Invalid(
                         "the previous action for a `CreateAgent` must be an `AgentValidationPkg`"

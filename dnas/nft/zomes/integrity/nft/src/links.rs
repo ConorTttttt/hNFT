@@ -1,5 +1,9 @@
 use crate::agreement::{MintAgreement, RevealDefault};
-use crate::blind_collection::{load_purchase_commitment, BlindBatchCommitment};
+use crate::blind_collection::{
+    load_batch_close, load_batch_commitment, load_inventory, load_purchase_commitment,
+    load_randomness_result,
+};
+use crate::generation_record::GenerationRecord;
 use crate::nft_manifest::{is_create_of, NftManifest};
 use crate::transfer::{load_commitment, load_receipt, TransferReceipt};
 use crate::UnitEntryTypes;
@@ -229,14 +233,7 @@ pub fn validate_create_link_path_to_blind_batch(
     action: TypedAction<CreateLinkData>,
 ) -> ExternResult<ValidateCallbackResult> {
     let target = target_action_hash(&action)?;
-    let record = must_get_valid_record(target)?;
-    let _batch: BlindBatchCommitment = record
-        .entry()
-        .to_app_option()
-        .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("{e:?}"))))?
-        .ok_or(wasm_error!(WasmErrorInner::Guest(
-            "PathToBlindBatch target must be a BlindBatchCommitment".into()
-        )))?;
+    load_batch_commitment(&target)?;
     Ok(ValidateCallbackResult::Valid)
 }
 
@@ -322,6 +319,70 @@ pub fn validate_create_link_agent_to_delegated_reveal(
     if agreement.delegate.as_ref() != Some(&delegate) {
         return Ok(ValidateCallbackResult::Invalid(
             "AgentToDelegatedReveal base is not the agreement's delegate".into(),
+        ));
+    }
+    Ok(ValidateCallbackResult::Valid)
+}
+
+/// NftManifest mint action -> GenerationRecord action.
+pub fn validate_create_link_nft_to_generation(
+    action: TypedAction<CreateLinkData>,
+) -> ExternResult<ValidateCallbackResult> {
+    let nft = base_action_hash(&action)?;
+    let target = target_action_hash(&action)?;
+    let rec = must_get_valid_record(target)?;
+    let generation: GenerationRecord = rec
+        .entry()
+        .to_app_option()
+        .map_err(|e| wasm_error!(WasmErrorInner::Guest(format!("{e:?}"))))?
+        .ok_or(wasm_error!(WasmErrorInner::Guest(
+            "NftToGeneration target is not a GenerationRecord".into()
+        )))?;
+    if generation.nft != nft {
+        return Ok(ValidateCallbackResult::Invalid(
+            "NftToGeneration base does not match the record's nft".into(),
+        ));
+    }
+    Ok(ValidateCallbackResult::Valid)
+}
+
+/// batch -> InventoryFinalized (discovery only).
+pub fn validate_create_link_batch_to_inventory(
+    action: TypedAction<CreateLinkData>,
+) -> ExternResult<ValidateCallbackResult> {
+    let batch = base_action_hash(&action)?;
+    let (_, inventory) = load_inventory(&target_action_hash(&action)?)?;
+    if inventory.batch != batch {
+        return Ok(ValidateCallbackResult::Invalid(
+            "BatchToInventory base does not match the inventory's batch".into(),
+        ));
+    }
+    Ok(ValidateCallbackResult::Valid)
+}
+
+/// batch -> BatchClose (discovery only).
+pub fn validate_create_link_batch_to_close(
+    action: TypedAction<CreateLinkData>,
+) -> ExternResult<ValidateCallbackResult> {
+    let batch = base_action_hash(&action)?;
+    let (_, close) = load_batch_close(&target_action_hash(&action)?)?;
+    if close.batch != batch {
+        return Ok(ValidateCallbackResult::Invalid(
+            "BatchToClose base does not match the close's batch".into(),
+        ));
+    }
+    Ok(ValidateCallbackResult::Valid)
+}
+
+/// BatchClose -> RandomnessResult (discovery only).
+pub fn validate_create_link_close_to_result(
+    action: TypedAction<CreateLinkData>,
+) -> ExternResult<ValidateCallbackResult> {
+    let close = base_action_hash(&action)?;
+    let (_, result) = load_randomness_result(&target_action_hash(&action)?)?;
+    if result.close != close {
+        return Ok(ValidateCallbackResult::Invalid(
+            "CloseToResult base does not match the result's close".into(),
         ));
     }
     Ok(ValidateCallbackResult::Valid)
