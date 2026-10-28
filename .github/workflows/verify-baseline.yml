@@ -1,0 +1,52 @@
+name: hNFT baseline verification
+
+on:
+  push:
+    branches:
+      - 'baseline/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: baseline-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  typescript-and-ui:
+    name: TypeScript client and Svelte UI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            client/package-lock.json
+            ui/package-lock.json
+      - name: Install client dependencies
+        run: npm ci --prefix client
+      - name: Install UI dependencies
+        run: npm ci --prefix ui
+      - name: Verify exact source and run all TS/UI checks
+        run: bash scripts/verify-baseline.sh typescript
+
+  holochain-protocol:
+    name: Holochain builds and Rust integration tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: '2'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: cachix/install-nix-action@v31
+      - name: Build packed hApp and run complete Cargo suite (Nix toolchain)
+        run: nix develop --accept-flake-config --command bash scripts/verify-baseline.sh holochain
