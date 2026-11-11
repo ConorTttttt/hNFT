@@ -1,0 +1,104 @@
+{
+  "scope": "finite abstract model; not production verification",
+  "results": {
+    "durable_3_of_4_one_byzantine": {
+      "safe": true,
+      "visited_states": 3087
+    },
+    "honest_split_can_stall": {
+      "safe": true,
+      "visited_states": 2401,
+      "stalled_split_trace": [
+        "W0 persists lock B",
+        "W0 signs locked B",
+        "Deliver W0/B",
+        "W1 persists lock B",
+        "W1 signs locked B",
+        "Deliver W1/B",
+        "W2 persists lock A",
+        "W2 signs locked A",
+        "Deliver W2/A",
+        "W3 persists lock A",
+        "W3 signs locked A",
+        "Deliver W3/A"
+      ]
+    },
+    "unsafe_sign_before_persist": {
+      "safe": false,
+      "visited_states": 150700,
+      "counterexample": [
+        "Byzantine W0 signs A",
+        "Deliver W0/A",
+        "Byzantine W0 signs B",
+        "Deliver W0/B",
+        "W1 emits A, crashes before persistence",
+        "Deliver W1/A",
+        "W1 emits B, crashes before persistence",
+        "Deliver W1/B",
+        "W2 emits A, crashes before persistence",
+        "Deliver W2/A",
+        "W2 emits B, crashes before persistence",
+        "Deliver W2/B"
+      ]
+    },
+    "unsafe_timeout_or_restore_unlock": {
+      "safe": false,
+      "visited_states": 124825,
+      "counterexample": [
+        "Byzantine W0 signs A",
+        "Deliver W0/A",
+        "Byzantine W0 signs B",
+        "Deliver W0/B",
+        "W1 persists lock A",
+        "W1 signs locked A",
+        "Deliver W1/A",
+        "W1 unsafely clears lock (timeout or stale restore)",
+        "W1 persists lock B",
+        "W1 signs locked B",
+        "Deliver W1/B",
+        "W2 persists lock A",
+        "W2 signs locked A",
+        "Deliver W2/A",
+        "W3 persists lock B",
+        "W3 signs locked B",
+        "Deliver W3/B"
+      ]
+    },
+    "outside_fault_bound_two_byzantine": {
+      "safe": false,
+      "visited_states": 3969,
+      "counterexample": [
+        "Byzantine W0 signs A",
+        "Deliver W0/A",
+        "Byzantine W0 signs B",
+        "Deliver W0/B",
+        "Byzantine W1 signs A",
+        "Deliver W1/A",
+        "Byzantine W1 signs B",
+        "Deliver W1/B",
+        "W2 persists lock A",
+        "W2 signs locked A",
+        "Deliver W2/A",
+        "W3 persists lock B",
+        "W3 signs locked B",
+        "Deliver W3/B"
+      ]
+    },
+    "unsafe_2_of_4_threshold": {
+      "safe": false,
+      "visited_states": 2925,
+      "counterexample": [
+        "Byzantine W0 signs A",
+        "Deliver W0/A",
+        "Byzantine W0 signs B",
+        "Deliver W0/B",
+        "W1 persists lock A",
+        "W1 signs locked A",
+        "Deliver W1/A",
+        "W2 persists lock B",
+        "W2 signs locked B",
+        "Deliver W2/B"
+      ]
+    }
+  }
+}
