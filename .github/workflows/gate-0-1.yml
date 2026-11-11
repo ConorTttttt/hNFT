@@ -8,6 +8,12 @@ on:
       - gate/s0-01-holochain-0.7.1
   workflow_dispatch:
 
+# Later branch pushes cancel obsolete bootstrap runs; only the latest tree
+# should generate lockfile commits or consume CI resources.
+concurrency:
+  group: gate-0-1-lock
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
