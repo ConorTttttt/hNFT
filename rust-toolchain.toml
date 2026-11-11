@@ -1,0 +1,7 @@
+# Align standalone rustup with the pinned Holonix 0.7.1 dev shell.
+# Source: holochain/holonix main-0.7 at the time of this upgrade.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"
