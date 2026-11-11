@@ -14,6 +14,20 @@
     flake-parts.follows = "holonix/flake-parts";
   };
 
+  # Use the public Holochain CI binary cache recommended by Holonix.
+  # This avoids building the full conductor from source on clean machines.
+  # Only trusted cache signatures are accepted.
+  nixConfig = {
+    substituters = [
+      "https://cache.nixos.org"
+      "https://holochain-ci.cachix.org"
+    ];
+    trusted-public-keys = [
+      "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+      "holochain-ci.cachix.org-1:5IUSkZc0aoRS53rfkvH9Kid40NpyjwCMCzwRTXy+QN8="
+    ];
+  };
+
   outputs = inputs@{ flake-parts, ... }: flake-parts.lib.mkFlake { inherit inputs; } {
     systems = builtins.attrNames inputs.holonix.devShells;
     perSystem = { inputs', pkgs, ... }: {
