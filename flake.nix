@@ -5,6 +5,10 @@
     # Pin the versioned branch, not `main`. Holonix `main` tracks the current
     # dev line (0.8 as of August 2026), so `main` silently moves you off 0.7.
     holonix.url = "github:holochain/holonix?ref=main-0.7";
+    # Keep the conductor/CLI on the approved 0.7.1 patch even when
+    # holonix/main-0.7 eventually advances to another patch release.
+    holonix.inputs.holochain.url = "github:holochain/holochain?ref=holochain-0.7.1";
+    holonix.inputs.holochain.flake = false;
 
     nixpkgs.follows = "holonix/nixpkgs";
     flake-parts.follows = "holonix/flake-parts";
