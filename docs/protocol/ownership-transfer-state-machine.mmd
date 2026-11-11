@@ -1,0 +1,23 @@
+%% hNFT Gate 0.2 / ADR-0001 (PROPOSED; NOT APPROVED)
+%% Only seller-authored Finalization changes NFT ownership.
+stateDiagram-v2
+    direction TB
+    [*] --> Owned: Mint or prior finalized state
+    Owned --> Offered: Seller creates Offer
+    Offered --> Accepted: Buyer accepts (provisional)
+    Accepted --> Finalized: Seller finalizes (title moves)
+    Finalized --> Owned: New owner gets finalized state
+    Offered --> Cancelled: Seller cancels by accept_by
+    Accepted --> Cancelled: Seller cancels; acceptance orphaned
+    Offered --> Expired: Seller expires after finalize_by
+    Accepted --> Expired: Seller expires; acceptance orphaned
+    Cancelled --> Owned: Original owner retained
+    Expired --> Owned: Original owner retained
+    note right of Accepted
+        Acceptance does not grant ownership.
+        Remote acceptance can race with seller closure.
+    end note
+    note right of Finalized
+        Finalization is exclusive with cancellation or expiry
+        on the seller source chain for this ownership state.
+    end note
