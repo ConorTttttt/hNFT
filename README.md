@@ -57,13 +57,24 @@ cargo test                             # Sweettest suite (needs the .dna packed)
 > Add `-C link-arg=--allow-undefined` to `RUSTFLAGS` for a local smoke build, or
 > just build inside `nix develop` where the stock command works.
 
+## Gate 0.1 — Holochain 0.7.1 toolchain
+
+The `gate/s0-01-holochain-0.7.1` branch upgrades the dependencies and
+capability grant API. **0.7.1 build/test verification remains NO-GO until
+the lockfile-refresh workflow and clean-environment tests succeed.**
+See [development setup](docs/development.md) and
+[Gate 0.1 compatibility/evidence report](docs/gates/0.1-dependency-compatibility.md).
+
+The verification results below were recorded for the earlier **0.7.0**
+baseline and are **not** evidence that this branch passes on 0.7.1.
+
 ## Verification status
 
-- ✅ `cargo check` — both `nft_integrity` and `nft` compile clean against
+- ✅ **Historical (0.7.0)** `cargo check` — both `nft_integrity` and `nft` compiled against
   `hdi = 0.8.0` / `hdk = 0.7.0` (no warnings).
-- ✅ `cargo build --target wasm32-unknown-unknown` — both zomes link to wasm
+- ✅ **Historical (0.7.0)** `cargo build --target wasm32-unknown-unknown` — both zomes linked to wasm
   (stock command inside `nix develop`).
-- ✅ **Sweettest — 13/13 passing** (`nix develop`, holochain 0.7.0).
+- ✅ **Historical Sweettest — 13/13 passing** (`nix develop`, holochain 0.7.0).
 
   `tests/flows.rs` (7):
   - `mint_and_reveal` — commit-reveal accepts the true preimage, rejects a wrong salt.
