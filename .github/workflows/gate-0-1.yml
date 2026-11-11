@@ -1,0 +1,112 @@
+name: Gate 0.1 - Holochain 0.7.1 foundation
+
+# This bootstrap gate deliberately refreshes lockfiles once on its dedicated
+# branch. Follow-up changes MUST use npm ci / cargo --locked, not float versions.
+on:
+  push:
+    branches:
+      - gate/s0-01-holochain-0.7.1
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-locks-and-validate:
+    name: Lock dependencies, compile and run legacy tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes
+        accept-flake-config = true
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Refresh 0.7.1 Holonix and dependency locks
+        shell: bash
+        run: |
+          set -euo pipefail
+          nix flake update holonix
+          nix develop --accept-flake-config --command bash -euo pipefail -c '
+            cargo update
+            npm install --package-lock-only --ignore-scripts
+            npm --prefix client install --package-lock-only --ignore-scripts
+            npm --prefix ui install --package-lock-only --ignore-scripts
+          '
+
+      - name: Commit refreshed lockfiles to gate branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add flake.lock Cargo.lock package-lock.json client/package-lock.json ui/package-lock.json
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore(gate-0.1): lock Holochain 0.7.1 and npm dependency graphs"
+            git push origin HEAD:gate/s0-01-holochain-0.7.1
+          fi
+
+      - name: Verify exact toolchain
+        shell: bash
+        run: |
+          mkdir -p gate-evidence
+          set -o pipefail
+          nix develop --accept-flake-config --command bash scripts/verify-toolchain.sh 2>&1 | tee gate-evidence/toolchain.log
+
+      - name: Rust workspace check
+        shell: bash
+        run: |
+          set -o pipefail
+          nix develop --accept-flake-config --command cargo check --locked 2>&1 | tee gate-evidence/cargo-check.log
+
+      - name: TypeScript client build
+        shell: bash
+        run: |
+          set -euo pipefail
+          nix develop --accept-flake-config --command bash -euo pipefail -c '
+            npm --prefix client ci
+            npm --prefix client run build
+          ' 2>&1 | tee gate-evidence/client-build.log
+
+      - name: Svelte application build
+        shell: bash
+        run: |
+          set -euo pipefail
+          nix develop --accept-flake-config --command bash -euo pipefail -c '
+            npm --prefix ui ci
+            npm --prefix ui run build
+          ' 2>&1 | tee gate-evidence/ui-build.log
+
+      - name: WASM and hApp build
+        shell: bash
+        run: |
+          set -euo pipefail
+          nix develop --accept-flake-config --command npm run build:happ 2>&1 | tee gate-evidence/happ-build.log
+
+      - name: Existing Sweettests
+        shell: bash
+        run: |
+          set -euo pipefail
+          nix develop --accept-flake-config --command cargo test --locked -- --test-threads=1 2>&1 | tee gate-evidence/sweettests.log
+
+      - name: Upload Gate 0.1 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-0-1-build-evidence
+          path: gate-evidence/*.log
+          if-no-files-found: warn
+          retention-days: 30
