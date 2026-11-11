@@ -1,36 +1,23 @@
-%% hNFT Gate 0.2, ADR-0001 — proposed protocol, NOT approved.
-%% Canonical ownership changes ONLY when the seller authors Finalization.
+%% hNFT Gate 0.2 / ADR-0001 (PROPOSED; NOT APPROVED)
+%% Only seller-authored Finalization changes NFT ownership.
 stateDiagram-v2
     direction TB
-    [*] --> Owned: mint or prior finalized state
-    Owned --> Offered: owner authors Offer
-    Offered --> Accepted: named buyer authors Acceptance
-(provisional, no title)
-    Accepted --> Finalized: owner authors valid Finalization
-(only title-changing transition)
-    Finalized --> Owned: new owner state = Finalization action
-    Offered --> Cancelled: owner authors Cancellation
-(<= accept_by)
-    Accepted --> Cancelled: valid Acceptance orphaned
-if seller cancels before Finalization
-    Offered --> Expired: owner authors Expiry
-(> finalize_by)
-    Accepted --> Expired: Acceptance orphaned
-if no Finalization by cutoff
-    Cancelled --> Owned: original owner retained
-    Expired --> Owned: original owner retained
-
-    note right of Offered
-        Only one active Offer for each owner state.
-        No DHT link or signal authorizes title.
-    end note
+    [*] --> Owned: Mint or prior finalized state
+    Owned --> Offered: Seller creates Offer
+    Offered --> Accepted: Buyer accepts (provisional)
+    Accepted --> Finalized: Seller finalizes (title moves)
+    Finalized --> Owned: New owner gets finalized state
+    Offered --> Cancelled: Seller cancels by accept_by
+    Accepted --> Cancelled: Seller cancels; acceptance orphaned
+    Offered --> Expired: Seller expires after finalize_by
+    Accepted --> Expired: Seller expires; acceptance orphaned
+    Cancelled --> Owned: Original owner retained
+    Expired --> Owned: Original owner retained
     note right of Accepted
-        Remote acceptance and seller close can race.
-        Accepted is an observed workflow stage,
-        never an authoritative ownership state.
+        Acceptance does not grant ownership.
+        Remote acceptance can race with seller closure.
     end note
     note right of Finalized
-        Finalization and Cancellation/Expiry are
-        exclusive seller-chain terminal events.
-        Finalization consumes prev_owner_state.
+        Finalization is exclusive with cancellation or expiry
+        on the seller source chain for this ownership state.
     end note
