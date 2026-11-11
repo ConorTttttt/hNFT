@@ -10,11 +10,12 @@
     "test": "npm run build:happ && cargo test -- --test-threads=1"
   },
   "devDependencies": {
-    "@holochain/hc-spin": "^0.700.0",
-    "wait-on": "^8.0.2"
+    "@holochain/hc-spin": "0.700.1",
+    "wait-on": "8.0.5"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
   },
   "hcScaffold": {
     "template": "headless"
