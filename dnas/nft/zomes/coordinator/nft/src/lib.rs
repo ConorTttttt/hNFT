@@ -15,11 +15,11 @@ pub fn init() -> ExternResult<InitCallbackResult> {
     // Allow any agent to deliver transfer-handshake nudges to this agent.
     let mut functions = HashSet::new();
     functions.insert((zome_info()?.name, FunctionName::from("recv_remote_signal")));
-    create_cap_grant(ZomeCallCapGrant {
-        tag: "recv_remote_signal".into(),
-        access: CapAccess::Unrestricted,
-        functions: GrantedFunctions::Listed(functions),
-    })?;
+    create_cap_grant(CapGrant::new_zome_call_grant(
+        "recv_remote_signal".into(),
+        GrantConstraint::Unrestricted,
+        GrantedFunctions::Listed(functions),
+    ))?;
     Ok(InitCallbackResult::Pass)
 }
 
