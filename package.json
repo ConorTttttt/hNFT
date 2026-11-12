@@ -2,19 +2,22 @@
   "name": "p2p-art-marketplace-dev",
   "private": true,
   "scripts": {
-    "build:zomes": "RUSTFLAGS='--cfg getrandom_backend=\"custom\"' cargo build --release --target wasm32-unknown-unknown",
+    "build:zomes": "RUSTFLAGS='--cfg getrandom_backend=\"custom\"' cargo build --locked --release --target wasm32-unknown-unknown",
     "build:dna": "hc dna pack dnas/nft/workdir -o dnas/nft/workdir/nft.dna",
     "build:happ": "npm run build:zomes && npm run build:dna && hc app pack workdir -o workdir/p2p_art_marketplace.happ",
-    "build:ui": "npm --prefix ui run build",
+    "build:ui": "npm run build:client && npm --prefix ui run build",
     "start": "bash scripts/live.sh",
-    "test": "npm run build:happ && cargo test -- --test-threads=1"
+    "test": "npm run build:happ && cargo test --locked -- --test-threads=1",
+    "build:client": "npm --prefix client run build",
+    "verify:toolchain": "bash scripts/verify-toolchain.sh"
   },
   "devDependencies": {
-    "@holochain/hc-spin": "^0.700.0",
-    "wait-on": "^8.0.2"
+    "@holochain/hc-spin": "0.700.1",
+    "wait-on": "8.0.5"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
   },
   "hcScaffold": {
     "template": "headless"
